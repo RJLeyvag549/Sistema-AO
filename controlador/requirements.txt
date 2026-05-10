@@ -1,0 +1,6 @@
+numpy
+scipy
+influxdb-client
+flask
+flask-cors
+requests

@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  interfaz:
+    build: ./interfaz
+    container_name: ao_interfaz
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./interfaz:/app
+      - /app/node_modules
+    networks:
+      - ao_pipeline_net
+    depends_on:
+      - simulador
+
+  simulador:
+    build: ./simulador
+    container_name: ao_simulador
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./simulador:/app
+      - shared_data:/app/shared
+    networks:
+      - ao_pipeline_net
+
+  inferencia:
+    build: ./inferencia
+    container_name: ao_inferencia
+    ports:
+      - "5001:5000"
+    volumes:
+      - ./inferencia:/app
+      - shared_data:/app/shared
+    networks:
+      - ao_pipeline_net
+
+  controlador:
+    build: ./controlador
+    container_name: ao_controlador
+    ports:
+      - "5002:5000"
+    volumes:
+      - ./controlador:/app
+    networks:
+      - ao_pipeline_net
+    depends_on:
+      db:
+        condition: service_healthy
+      inferencia:
+        condition: service_started
+      simulador:
+        condition: service_started
+
+  db:
+    image: influxdb:2.7
+    container_name: ao_database
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=password123
+      - DOCKER_INFLUXDB_INIT_ORG=UBB_oa
+      - DOCKER_INFLUXDB_INIT_BUCKET=ao_telemetry
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-auth-token
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ao_pipeline_net
+
+networks:
+  ao_pipeline_net:
+    driver: bridge
+
+volumes:
+  shared_data:

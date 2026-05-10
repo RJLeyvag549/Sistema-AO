@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ao-accent: #00f2ff;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background-color: #0a0b1e;
+}
+
+.font-orbitron {
+  font-family: 'Orbitron', sans-serif;
+}
+
+.font-mono {
+  font-family: 'Roboto Mono', monospace;
+}
+
+.glass-panel {
+  background: rgba(21, 25, 50, 0.7);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(0, 242, 255, 0.2);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+.neon-border {
+  box-shadow: 0 0 10px rgba(0, 242, 255, 0.5), inset 0 0 5px rgba(0, 242, 255, 0.2);
+}
+
+.cyber-button {
+  transition: all 0.3s ease;
+  clip-path: polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%);
+}
+
+.cyber-button:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.2);
+}

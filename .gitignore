@@ -1,0 +1,29 @@
+# Librerías de Node/React
+interfaz/node_modules/
+interfaz/dist/
+interfaz/.vite/
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.venv/
+env/
+
+# Datos de la Simulación (Cosas pesadas/temporales)
+shared/*.npy
+influxdb_data/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
