@@ -1,5 +1,5 @@
 numpy
-requests
+# requests
 flask
 flask-cors
 Pillow
