@@ -7,9 +7,7 @@ const API_BASE = 'http://localhost:5000';
 
 function App() {
   const [params, setParams] = useState({
-    turbulencia: 0.5,
-    viento: 10,
-    humedad: 50
+    piston: 0.0
   });
   const [images, setImages] = useState({
     distorted: `${API_BASE}/image/distorted?t=${Date.now()}`,
@@ -58,7 +56,7 @@ function App() {
             <Activity className="text-ao-bg" size={24} />
           </div>
           <div>
-            <h1 className="text-2xl font-orbitron font-bold text-ao-accent tracking-widest uppercase">Sistema AO</h1>
+            <h1 className="text-2xl font-orbitron font-bold text-ao-accent tracking-widest uppercase">Sistema AO (Óptica Adaptativa)</h1>
             <p className="text-[10px] font-mono text-ao-accent/60">ADAPTIVE OPTICS CONTROL UNIT // UBB CHILE</p>
           </div>
         </div>
@@ -72,9 +70,7 @@ function App() {
               <Settings size={20} /> PARAMETROS
             </h2>
             <div className="space-y-8">
-              <ControlSlider label="Turbulencia" icon={<Activity size={18}/>} name="turbulencia" value={params.turbulencia} min={0} max={1} step={0.01} onChange={handleSliderChange} />
-              <ControlSlider label="Viento (m/s)" icon={<Wind size={18}/>} name="viento" value={params.viento} min={0} max={50} step={1} onChange={handleSliderChange} />
-              <ControlSlider label="Humedad (%)" icon={<Droplets size={18}/>} name="humedad" value={params.humedad} min={0} max={100} step={1} onChange={handleSliderChange} />
+              <ControlSlider label="Piston (Z0)" icon={<Activity size={18}/>} name="piston" value={params.piston} min={-2} max={2} step={0.01} unit="π" onChange={handleSliderChange} />
             </div>
             <div className="mt-12 p-4 bg-ao-bg/50 border border-ao-accent/20 rounded font-mono text-xs text-ao-accent/80">
               <p className="flex items-center gap-2 mb-2"><Info size={14}/> DIAGNOSTICO</p>
@@ -115,12 +111,12 @@ function App() {
   );
 }
 
-function ControlSlider({ label, icon, name, value, min, max, step, onChange }) {
+function ControlSlider({ label, icon, name, value, min, max, step, unit = "", onChange }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex justify-between items-center text-xs font-mono">
         <span className="flex items-center gap-2 text-gray-400">{icon} {label.toUpperCase()}</span>
-        <span className="text-ao-accent">{value}</span>
+        <span className="text-ao-accent">{value}{unit}</span>
       </div>
       <input type="range" name={name} min={min} max={max} step={step} value={value} onChange={onChange} className="w-full h-1 bg-ao-panel rounded-lg appearance-none cursor-pointer accent-ao-accent" />
     </div>
