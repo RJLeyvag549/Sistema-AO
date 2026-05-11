@@ -39,6 +39,10 @@ services:
     container_name: ao_controlador
     ports:
       - "${CONTROLADOR_PORT:-5002}:5000"
+    environment:
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-token_provisorio_de_github}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-organizacion_ao}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-telemetria_bucket}
     volumes:
       - ./controlador:/app
     networks:

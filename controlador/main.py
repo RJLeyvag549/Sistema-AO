@@ -24,9 +24,9 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 
 # Configuración InfluxDB
 DB_URL = "http://ao_database:8086"
-DB_TOKEN = "my-super-secret-auth-token" # El token por defecto que configuramos
-DB_ORG = "UBB_oa"
-DB_BUCKET = "ao_telemetry"
+DB_TOKEN = os.environ.get("INFLUXDB_TOKEN", "token_provisorio_de_github")
+DB_ORG = os.environ.get("INFLUXDB_ORG", "organizacion_ao")
+DB_BUCKET = os.environ.get("INFLUXDB_BUCKET", "telemetria_bucket")
 
 @app.route('/calibrate', methods=['POST'])
 def calibrate():
@@ -67,11 +67,11 @@ def logic_loop():
             # zernike = response.json().get('zernike')
             
             # 3. Aplicar Modelo Físico y enviar corrección al Simulador
-            # print(f"   🔧 Aplicando corrección basada en Zernike...")
+            # print(f"Aplicando corrección basada en Zernike")
             
             time.sleep(2)
         except Exception as e:
-            print(f"   ⚠️ Error en ciclo de control: {e}")
+            print(f" Error en ciclo de control: {e}")
             time.sleep(5)
 
 if __name__ == '__main__':
