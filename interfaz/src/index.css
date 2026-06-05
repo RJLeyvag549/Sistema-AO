@@ -1,42 +1,169 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --ao-accent: #00f2ff;
+  --lab-bg: #121214;
+  --lab-panel: #1e1e24;
+  --lab-border: #2e2e38;
+  --lab-border-focus: #4e4e5a;
+  --lab-accent: #3b82f6;
+  --lab-text: #e4e4e7;
+  --lab-text-secondary: #a1a1aa;
 }
 
 body {
   margin: 0;
-  overflow: hidden;
-  background-color: #0a0b1e;
+  padding: 0;
+  background-color: var(--lab-bg);
+  color: var(--lab-text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow-y: auto; /* Permitir scroll vertical libre */
+  -webkit-font-smoothing: antialiased;
 }
 
-.font-orbitron {
-  font-family: 'Orbitron', sans-serif;
+.font-sans {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 .font-mono {
-  font-family: 'Roboto Mono', monospace;
+  font-family: 'JetBrains Mono', 'Roboto Mono', monospace;
 }
 
-.glass-panel {
-  background: rgba(21, 25, 50, 0.7);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(0, 242, 255, 0.2);
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+/* ── Panel de laboratorio científico ───────────────────────── */
+.lab-panel {
+  background: var(--lab-panel);
+  border: 1px solid var(--lab-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
-.neon-border {
-  box-shadow: 0 0 10px rgba(0, 242, 255, 0.5), inset 0 0 5px rgba(0, 242, 255, 0.2);
+.lab-border-thin {
+  border: 1px solid var(--lab-border);
 }
 
-.cyber-button {
-  transition: all 0.3s ease;
-  clip-path: polygon(10% 0, 100% 0, 100% 70%, 90% 100%, 0 100%, 0 30%);
+/* ── Botón estándar de laboratorio ─────────────────────────── */
+.lab-button {
+  background: #27272a;
+  border: 1px solid var(--lab-border);
+  color: var(--lab-text);
+  font-weight: 500;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  cursor: pointer;
 }
 
-.cyber-button:hover {
-  transform: translateY(-2px);
-  filter: brightness(1.2);
+.lab-button:hover:not(:disabled) {
+  background: #3f3f46;
+  border-color: var(--lab-border-focus);
+}
+
+.lab-button:active:not(:disabled) {
+  background: #18181b;
+}
+
+.lab-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Botón principal (Calibrar) ────────────────────────────── */
+.lab-button-primary {
+  background: var(--lab-accent);
+  border: 1px solid #2563eb;
+  color: #ffffff;
+  font-weight: 600;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.lab-button-primary:hover:not(:disabled) {
+  background: #2563eb;
+  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
+}
+
+.lab-button-primary:active:not(:disabled) {
+  background: #1d4ed8;
+}
+
+/* ── Slider Zernike científico ────────────────────────────── */
+.zernike-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1.5px solid var(--lab-accent);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  cursor: pointer;
+  transition: background-color 0.1s;
+}
+
+.zernike-slider::-webkit-slider-thumb:hover {
+  background: var(--lab-accent);
+}
+
+.zernike-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1.5px solid var(--lab-accent);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  cursor: pointer;
+}
+
+/* ── Scrollbar personalizada del panel Zernike ────────────── */
+.zernike-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #3f3f46 transparent;
+}
+
+.zernike-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.zernike-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.zernike-scroll::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 999px;
+}
+
+.zernike-scroll::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
+/* ── Botón de paso fino de Zernike ───────────────────────── */
+.zernike-step-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  border: 1px solid #2e2e38;
+  background: #27272a;
+  color: #a1a1aa;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  flex-shrink: 0;
+  font-family: monospace;
+}
+
+.zernike-step-btn:hover {
+  background: #3f3f46;
+  border-color: #4e4e5a;
+  color: #e4e4e7;
+}
+
+.zernike-step-btn:active {
+  background: #18181b;
 }

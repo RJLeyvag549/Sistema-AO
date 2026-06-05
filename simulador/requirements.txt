@@ -1,5 +1,9 @@
 numpy
-# requests
+scipy
 flask
 flask-cors
 Pillow
+requests
+influxdb-client
+prysm
+aotools

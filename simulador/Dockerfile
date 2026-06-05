@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir flask flask-cors Pillow numpy requests influxdb-client
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
