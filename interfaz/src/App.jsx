@@ -36,13 +36,51 @@ function App() {
   });
   const [d_r0, setDR0] = useState(1.0);
   const [windSpeed, setWindSpeed] = useState(0.5);
-  const [images, setImages] = useState({
-    distorted: `${API_BASE}/image/distorted?t=${Date.now()}`,
-    psf: `${API_BASE}/image/psf?t=${Date.now()}`,
-  });
+  // Solo necesitamos la imagen del panel CNN (PSF); el mapa SLM va directo al canvas GPU
+  const [psfImage] = useState(`${API_BASE}/image/psf?t=${Date.now()}`);
   const [loading, setLoading] = useState(false);
   const [simOnline, setSimOnline] = useState(false);
-  const debounceRef = useRef(null);
+  const [fps, setFps] = useState(0);
+  const debounceRef   = useRef(null);
+  const loadedFramesRef = useRef(0);
+  const canvasRef     = useRef(null);   // Canvas GPU para el mapa de fase SLM
+  const drawRef       = useRef(null);   // Función de dibujo (ref para recursividad estable)
+  const loopIdRef     = useRef(null);   // ID de requestAnimationFrame del bucle
+
+  const methodRef = useRef(method);
+  useEffect(() => {
+    methodRef.current = method;
+  }, [method]);
+
+  // ── RENDER GPU: fetch bytes raw del simulador y pinta en canvas ──────────────
+  // La física (Prysm) vive en el simulador. El browser solo recibe los píxeles.
+  drawRef.current = () => {
+    fetch(`${API_BASE}/image/distorted-raw`)
+      .then(res => res.arrayBuffer())
+      .then(buffer => {
+        const gray = new Uint8Array(buffer);          // 640×360 = 230 400 bytes
+        const rgba = new Uint8ClampedArray(gray.length * 4);
+        for (let i = 0; i < gray.length; i++) {
+          rgba[i * 4]     = gray[i];  // R
+          rgba[i * 4 + 1] = gray[i];  // G
+          rgba[i * 4 + 2] = gray[i];  // B
+          rgba[i * 4 + 3] = 255;       // A
+        }
+        const ctx = canvasRef.current?.getContext('2d');
+        if (ctx) ctx.putImageData(new ImageData(rgba, 640, 360), 0, 0);
+        loadedFramesRef.current += 1;
+        // Auto-loop solo en modo estocástico
+        if (methodRef.current === '2') {
+          loopIdRef.current = requestAnimationFrame(drawRef.current);
+        }
+      })
+      .catch(() => {
+        // Reintento suave en caso de error de red
+        if (methodRef.current === '2') {
+          loopIdRef.current = requestAnimationFrame(drawRef.current);
+        }
+      });
+  };
 
   // Verificar estado del simulador
   useEffect(() => {
@@ -61,23 +99,25 @@ function App() {
 
   // Manejar loops automáticos para el Método 2 (Estocástico)
   useEffect(() => {
-    let intervalId = null;
+    let fpsIntervalId    = null;
     let zernikeIntervalId = null;
 
     if (method === '2') {
-      // Activar modo estocástico en backend
       axios.post(`${API_BASE}/config`, { method: '2', d_r0, wind_speed: windSpeed })
         .catch(err => console.error("Error al iniciar modo estocástico:", err));
 
-      // Loop rápido para actualizar imágenes como un video
-      intervalId = setInterval(() => {
-        setImages({
-          distorted: `${API_BASE}/image/distorted?t=${Date.now()}`,
-          psf: `${API_BASE}/image/psf?t=${Date.now()}`,
-        });
-      }, 60);
+      loadedFramesRef.current = 0;
 
-      // Loop secundario para leer coeficientes Zernike dinámicos en la UI
+      // Arrancar el bucle GPU: fetch raw → canvas (auto-regulado por requestAnimationFrame)
+      loopIdRef.current = requestAnimationFrame(drawRef.current);
+
+      // Contador de FPS visible en la UI
+      fpsIntervalId = setInterval(() => {
+        setFps(loadedFramesRef.current);
+        loadedFramesRef.current = 0;
+      }, 1000);
+
+      // Actualizar sliders con coeficientes dinámicos del backend
       zernikeIntervalId = setInterval(() => {
         axios.get(`${API_BASE}/status`)
           .then((res) => {
@@ -88,13 +128,15 @@ function App() {
           .catch(err => console.error("Error al actualizar Zernikes:", err));
       }, 200);
     } else {
-      // Desactivar en backend al volver a manual
+      // Detener el bucle GPU y volver a modo manual
+      if (loopIdRef.current) cancelAnimationFrame(loopIdRef.current);
       axios.post(`${API_BASE}/config`, { method: '1' })
         .catch(err => console.error("Error al volver a modo manual:", err));
     }
 
     return () => {
-      if (intervalId) clearInterval(intervalId);
+      if (loopIdRef.current) cancelAnimationFrame(loopIdRef.current);
+      if (fpsIntervalId)    clearInterval(fpsIntervalId);
       if (zernikeIntervalId) clearInterval(zernikeIntervalId);
     };
   }, [method]);
@@ -102,15 +144,13 @@ function App() {
   const updateZernike = (id, value) => {
     const nextZernikes = { ...zernikes, [id]: parseFloat(value) };
     setZernikes(nextZernikes);
-    
+
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
       try {
         await axios.post(`${API_BASE}/config`, { zernikes: nextZernikes });
-        setImages({
-          distorted: `${API_BASE}/image/distorted?t=${Date.now()}`,
-          psf: `${API_BASE}/image/psf?t=${Date.now()}`,
-        });
+        // Modo manual: pide un frame al simulador y lo pinta en canvas
+        drawRef.current();
       } catch (err) {
         console.error('Error al actualizar Zernikes:', err);
       }
@@ -139,12 +179,7 @@ function App() {
     };
     setZernikes(cleared);
     axios.post(`${API_BASE}/config`, { zernikes: cleared })
-      .then(() => {
-        setImages({
-          distorted: `${API_BASE}/image/distorted?t=${Date.now()}`,
-          psf: `${API_BASE}/image/psf?t=${Date.now()}`,
-        });
-      })
+      .then(() => drawRef.current())
       .catch(err => console.error('Error al resetear Zernikes:', err));
   };
 
@@ -162,7 +197,7 @@ function App() {
 
   return (
     <div className="min-h-screen p-6 flex flex-col gap-6 font-sans">
-      
+
       {/* ── HEADER ── */}
       <header className="flex justify-between items-center lab-panel px-6 py-4">
         <div className="flex items-center gap-3">
@@ -186,7 +221,7 @@ function App() {
 
       {/* ── CONTENIDO PRINCIPAL ── */}
       <main className="flex flex-col md:flex-row gap-6 items-start">
-        
+
         {/* Barra lateral de controles */}
         <aside className="w-full md:w-80 flex flex-col gap-4 shrink-0">
           <div className="lab-panel p-5 flex flex-col">
@@ -205,11 +240,10 @@ function App() {
                 className="w-full bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs rounded p-2.5 outline-none focus:border-zinc-700 font-sans"
               >
                 <option value="1">1. Modos Individuales Deterministas (Zernike)</option>
-                <option value="2">2. Turbulencia Estocástica por Modos</option>
-                <option value="3">3. Pantallas de Fase de Kolmogorov (En desarrollo)</option>
-                <option value="4">4. Simulación de Atmósfera Dinámica Evolutiva (En desarrollo)</option>
+                <option value="2">2. Turbulencia Estocástica (Kolmogorov)</option>
               </select>
             </div>
+
 
             {/* Sección Dinámica: 11 Polinomios de Zernike */}
             {method === '1' ? (
@@ -235,9 +269,21 @@ function App() {
                         <span className="text-[10px] font-mono text-zinc-300">
                           {mode.name}
                         </span>
-                        <span className="text-[10px] font-mono font-bold text-blue-400 min-w-[36px] text-right">
-                          {zernikes[mode.id].toFixed(2)}
-                        </span>
+                        <input
+                          type="number"
+                          value={parseFloat(zernikes[mode.id].toFixed(4))}
+                          onChange={(e) => {
+                            let val = parseFloat(e.target.value);
+                            if (!isNaN(val)) {
+                              val = Math.max(mode.min, Math.min(mode.max, val));
+                              updateZernike(mode.id, val);
+                            }
+                          }}
+                          step={0.01}
+                          min={mode.min}
+                          max={mode.max}
+                          className="w-16 bg-zinc-900 border border-zinc-800 text-blue-400 font-mono font-bold text-[10px] text-right rounded px-1 py-0.5 outline-none focus:border-blue-500/50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        />
                       </div>
                       {/* Slider */}
                       <ZernikeSlider
@@ -275,12 +321,26 @@ function App() {
                 <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
                   Parámetros de Turbulencia (Método 2)
                 </div>
-                
+
                 {/* Sliders for D/r0 */}
                 <div className="flex flex-col gap-1.5">
                   <div className="flex justify-between items-center text-[10px]">
                     <span className="text-zinc-300 font-mono">Fuerza Turbulencia (D/r₀)</span>
-                    <span className="font-bold text-blue-400 font-mono">{d_r0.toFixed(1)}</span>
+                    <input
+                      type="number"
+                      value={parseFloat(d_r0.toFixed(4))}
+                      onChange={(e) => {
+                        let val = parseFloat(e.target.value);
+                        if (!isNaN(val)) {
+                          val = Math.max(0.1, Math.min(6.0, val));
+                          handleDR0Change(val);
+                        }
+                      }}
+                      step={0.01}
+                      min={0.1}
+                      max={6.0}
+                      className="w-16 bg-zinc-900 border border-zinc-800 text-blue-400 font-mono font-bold text-[10px] text-right rounded px-1 py-0.5 outline-none focus:border-blue-500/50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
                   </div>
                   <ZernikeSlider
                     value={d_r0}
@@ -295,7 +355,21 @@ function App() {
                 <div className="flex flex-col gap-1.5">
                   <div className="flex justify-between items-center text-[10px]">
                     <span className="text-zinc-300 font-mono">Velocidad de Evolución (Viento)</span>
-                    <span className="font-bold text-blue-400 font-mono">{windSpeed.toFixed(2)}</span>
+                    <input
+                      type="number"
+                      value={parseFloat(windSpeed.toFixed(4))}
+                      onChange={(e) => {
+                        let val = parseFloat(e.target.value);
+                        if (!isNaN(val)) {
+                          val = Math.max(0.0, Math.min(1.0, val));
+                          handleWindSpeedChange(val);
+                        }
+                      }}
+                      step={0.01}
+                      min={0.0}
+                      max={1.0}
+                      className="w-16 bg-zinc-900 border border-zinc-800 text-blue-400 font-mono font-bold text-[10px] text-right rounded px-1 py-0.5 outline-none focus:border-blue-500/50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
                   </div>
                   <ZernikeSlider
                     value={windSpeed}
@@ -330,6 +404,9 @@ function App() {
                 Diagnóstico de Enlaces
               </div>
               <p>Simulador: <span className={simOnline ? 'text-emerald-400 font-semibold' : 'text-rose-400'}>{simOnline ? 'ONLINE' : 'OFFLINE'}</span></p>
+              {method === '2' && (
+                <p>FPS Simulación: <span className="text-blue-400 font-semibold">{fps} FPS</span></p>
+              )}
               <p>Inferencia: READY</p>
             </div>
           </div>
@@ -347,20 +424,37 @@ function App() {
         <section className="flex-1 flex flex-col gap-6 w-full">
           {method === '1' || method === '2' ? (
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 w-full animate-in fade-in duration-300">
-              
-              {/* Mapa de Fase SLM */}
-              <VisualPanel
-                title="MAPA DE FASE SLM"
-                subtitle={method === '1' ? "Frente de onda de fase resultante (Modulación 8-bit)" : "Mapa de fase dinámico de turbulencia estocástica"}
-                src={images.distorted}
-                label="SLM_PHASE_MAP (Prysm)"
-              />
 
-              {/* Frente de Onda Reconstruido */}
+              {/* Mapa de Fase SLM — Renderizado GPU via canvas (bytes raw de Prysm) */}
+              <div className="lab-panel p-4 flex flex-col h-[380px]">
+                <div className="mb-3">
+                  <span className="text-xs font-semibold text-white uppercase tracking-wider">MAPA DE FASE SLM</span>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    {method === '1' ? 'Frente de onda · Prysm → bytes raw → Canvas GPU' : 'Turbulencia estocástica · Prysm → bytes raw → Canvas GPU'}
+                  </p>
+                </div>
+                <div className="flex-1 bg-black rounded border border-zinc-800 overflow-hidden flex items-center justify-center relative min-h-0">
+                  <canvas
+                    ref={canvasRef}
+                    width={640}
+                    height={360}
+                    className="w-full h-full object-contain"
+                    style={{ imageRendering: 'pixelated' }}
+                  />
+                  <div className="absolute top-2 left-2 font-mono text-[9px] text-zinc-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
+                    SLM_PHASE_MAP (Prysm·GPU)
+                  </div>
+                  <div className="absolute top-2 right-2 font-mono text-[9px] text-blue-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
+                    ⚡ GPU
+                  </div>
+                </div>
+              </div>
+
+              {/* Frente de Onda Reconstruido (CNN) */}
               <VisualPanel
                 title="FRENTE DE ONDA RECONSTRUIDO"
                 subtitle="Estimación de fase predicha por la red neuronal (CNN)"
-                src={images.psf}
+                src={psfImage}
                 label="RECONSTRUCTED_WAVEFRONT (CNN)"
               />
 
@@ -440,7 +534,7 @@ function StatusBadge({ online, label }) {
   );
 }
 
-function VisualPanel({ title, subtitle, src, label }) {
+function VisualPanel({ title, subtitle, src, label, onLoad }) {
   return (
     <div className="lab-panel p-4 flex flex-col h-[380px]">
       <div className="mb-3">
@@ -448,7 +542,7 @@ function VisualPanel({ title, subtitle, src, label }) {
         <p className="text-xs text-zinc-400 mt-0.5">{subtitle}</p>
       </div>
       <div className="flex-1 bg-black rounded border border-zinc-800 overflow-hidden flex items-center justify-center relative min-h-0">
-        <img src={src} alt={title} className="w-full h-full object-contain" />
+        <img src={src} alt={title} className="w-full h-full object-contain" onLoad={onLoad} onError={onLoad} />
         <div className="absolute top-2 left-2 font-mono text-[9px] text-zinc-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
           {label}
         </div>
