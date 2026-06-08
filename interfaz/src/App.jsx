@@ -41,11 +41,11 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [simOnline, setSimOnline] = useState(false);
   const [fps, setFps] = useState(0);
-  const debounceRef   = useRef(null);
+  const debounceRef = useRef(null);
   const loadedFramesRef = useRef(0);
-  const canvasRef     = useRef(null);   // Canvas GPU para el mapa de fase SLM
-  const drawRef       = useRef(null);   // Función de dibujo (ref para recursividad estable)
-  const loopIdRef     = useRef(null);   // ID de requestAnimationFrame del bucle
+  const canvasRef = useRef(null);   // Canvas GPU para el mapa de fase SLM
+  const drawRef = useRef(null);   // Función de dibujo (ref para recursividad estable)
+  const loopIdRef = useRef(null);   // ID de requestAnimationFrame del bucle
 
   const methodRef = useRef(method);
   useEffect(() => {
@@ -61,7 +61,7 @@ function App() {
         const gray = new Uint8Array(buffer);          // 640×360 = 230 400 bytes
         const rgba = new Uint8ClampedArray(gray.length * 4);
         for (let i = 0; i < gray.length; i++) {
-          rgba[i * 4]     = gray[i];  // R
+          rgba[i * 4] = gray[i];  // R
           rgba[i * 4 + 1] = gray[i];  // G
           rgba[i * 4 + 2] = gray[i];  // B
           rgba[i * 4 + 3] = 255;       // A
@@ -99,7 +99,7 @@ function App() {
 
   // Manejar loops automáticos para el Método 2 (Estocástico)
   useEffect(() => {
-    let fpsIntervalId    = null;
+    let fpsIntervalId = null;
     let zernikeIntervalId = null;
 
     if (method === '2') {
@@ -136,7 +136,7 @@ function App() {
 
     return () => {
       if (loopIdRef.current) cancelAnimationFrame(loopIdRef.current);
-      if (fpsIntervalId)    clearInterval(fpsIntervalId);
+      if (fpsIntervalId) clearInterval(fpsIntervalId);
       if (zernikeIntervalId) clearInterval(zernikeIntervalId);
     };
   }, [method]);
@@ -445,7 +445,7 @@ function App() {
                     SLM_PHASE_MAP (Prysm·GPU)
                   </div>
                   <div className="absolute top-2 right-2 font-mono text-[9px] text-blue-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
-                    ⚡ GPU
+                    GPU
                   </div>
                 </div>
               </div>
