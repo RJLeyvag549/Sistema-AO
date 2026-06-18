@@ -1,8 +1,5 @@
-# torch
-# torchvision
 numpy
-# pandas
-# scipy
-# matplotlib
-# influxdb-client
+pandas
+scipy
+matplotlib
 flask

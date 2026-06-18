@@ -55,24 +55,39 @@ def calibrate():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 def logic_loop():
-    print("--- CONTROLADOR AO: CICLO DE CORRECCION INICIADO ---")
+    print("--- CONTROLADOR AO: REGISTRO DE TELEMETRÍA DE TURBULENCIA INICIADO ---", flush=True)
     while True:
         try:
-            # 1. El controlador podría estar esperando una señal o monitoreando el volumen
-            # Por ahora, simulamos el flujo cada 2 segundos
+            # 1. Obtener el estado actual de la turbulencia del simulador
+            response = requests.get("http://ao_simulador:5000/status", timeout=2)
+            if response.status_code == 200:
+                state_data = response.json()
+                state = state_data.get("state", {})
+                zernikes = state.get("zernikes", {})
+                d_r0 = state.get("d_r0", 1.0)
+                method = state.get("method", "1")
+                
+                # 2. Registrar en InfluxDB
+                with InfluxDBClient(url=DB_URL, token=DB_TOKEN, org=DB_ORG) as client:
+                    write_api = client.write_api(write_options=SYNCHRONOUS)
+                    
+                    point = Point("turbulence_telemetry") \
+                        .tag("device", "holoeye_pluto") \
+                        .tag("method", method) \
+                        .field("d_r0", float(d_r0))
+                    
+                    # Añadir cada uno de los 11 coeficientes a la telemetría
+                    for z_key, z_val in zernikes.items():
+                        point.field(z_key.lower(), float(z_val))
+                        
+                    point.time(time.time_ns(), WritePrecision.NS)
+                    write_api.write(bucket=DB_BUCKET, record=point)
             
-            # 2. Pedir predicción a la Inferencia
-            # (En un caso real, enviaríamos el estado actual del frente de onda)
-            # response = requests.get(INFERENCIA_URL)
-            # zernike = response.json().get('zernike')
-            
-            # 3. Aplicar Modelo Físico y enviar corrección al Simulador
-            # print(f"Aplicando corrección basada en Zernike")
-            
-            time.sleep(2)
+            # Registrar cada 500 ms (frecuencia de 2 Hz para no saturar y tener buena resolución)
+            time.sleep(0.5)
         except Exception as e:
-            print(f" Error en ciclo de control: {e}")
-            time.sleep(5)
+            print(f"[CONTROLADOR] Error en ciclo de registro de telemetría: {e}", flush=True)
+            time.sleep(3)
 
 if __name__ == '__main__':
     # Iniciar el ciclo de control en un hilo separado

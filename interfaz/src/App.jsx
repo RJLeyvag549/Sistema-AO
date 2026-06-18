@@ -7,8 +7,8 @@ const API_BASE = 'http://localhost:5000';
 
 const ZERNIKE_MODES = [
   { id: 'Z1', name: 'Z₁ — Pistón (Piston)', min: -Math.PI, max: Math.PI, step: 0.01 },
-  { id: 'Z2', name: 'Z₂ — Tip (Tilt X)', min: -3.0, max: 3.0, step: 0.05 },
-  { id: 'Z3', name: 'Z₃ — Tilt (Tilt Y)', min: -3.0, max: 3.0, step: 0.05 },
+  { id: 'Z2', name: 'Z₂ — Tip (Tilt X)', min: -6.0, max: 6.0, step: 0.05 },
+  { id: 'Z3', name: 'Z₃ — Tilt (Tilt Y)', min: -6.0, max: 6.0, step: 0.05 },
   { id: 'Z4', name: 'Z₄ — Desfoco (Defocus)', min: -5.0, max: 5.0, step: 0.05 },
   { id: 'Z5', name: 'Z₅ — Astigmatismo Oblicuo 45°', min: -5.0, max: 5.0, step: 0.05 },
   { id: 'Z6', name: 'Z₆ — Astigmatismo Vertical 0°', min: -5.0, max: 5.0, step: 0.05 },
@@ -37,15 +37,35 @@ function App() {
   const [d_r0, setDR0] = useState(1.0);
   const [windSpeed, setWindSpeed] = useState(0.5);
   // Solo necesitamos la imagen del panel CNN (PSF); el mapa SLM va directo al canvas GPU
-  const [psfImage] = useState(`${API_BASE}/image/psf?t=${Date.now()}`);
+  const [psfImage, setPsfImage] = useState(`${API_BASE}/image/psf?t=${Date.now()}`);
   const [loading, setLoading] = useState(false);
   const [simOnline, setSimOnline] = useState(false);
   const [fps, setFps] = useState(0);
+  const [fpsSLM, setFpsSLM] = useState(0);
+  const [fpsTurbPsf, setFpsTurbPsf] = useState(0);
+  const [fpsCnnPhase, setFpsCnnPhase] = useState(0);
+  const [fpsReconPsf, setFpsReconPsf] = useState(0);
+  const [avgAccuracy, setAvgAccuracy] = useState(100.0);
+
   const debounceRef = useRef(null);
-  const loadedFramesRef = useRef(0);
-  const canvasRef = useRef(null);   // Canvas GPU para el mapa de fase SLM
-  const drawRef = useRef(null);   // Función de dibujo (ref para recursividad estable)
-  const loopIdRef = useRef(null);   // ID de requestAnimationFrame del bucle
+  const slmFramesCountRef = useRef(0);
+  const turbPsfFramesCountRef = useRef(0);
+  const cnnPhaseFramesCountRef = useRef(0);
+  const reconPsfFramesCountRef = useRef(0);
+  const accuracyListRef = useRef([]);
+
+  const canvasRef = useRef(null);        // Canvas GPU: mapa de fase SLM (corrección perfecta)
+  const psfCanvasRef = useRef(null);     // Canvas GPU: PSF con turbulencia
+  const cnnPhaseCanvasRef = useRef(null); // Canvas GPU: mapa de fase estimado por CNN
+  const reconPsfCanvasRef = useRef(null); // Canvas GPU: PSF reconstruida por CNN
+  const drawRef = useRef(null);          // Función de dibujo del SLM (ref para recursividad)
+  const drawPsfRef = useRef(null);       // Función de dibujo de la PSF con turbulencia
+  const drawCnnPhaseRef = useRef(null);  // Función de dibujo del mapa de fase CNN
+  const drawReconPsfRef = useRef(null);  // Función de dibujo de la PSF reconstruida
+  const loopIdRef = useRef(null);        // ID de requestAnimationFrame del bucle SLM
+  const loopPsfIdRef = useRef(null);     // ID de requestAnimationFrame del bucle PSF
+  const loopCnnPhaseIdRef = useRef(null);
+  const loopReconPsfIdRef = useRef(null);
 
   const methodRef = useRef(method);
   useEffect(() => {
@@ -54,6 +74,9 @@ function App() {
 
   // ── RENDER GPU: fetch bytes raw del simulador y pinta en canvas ──────────────
   // La física (Prysm) vive en el simulador. El browser solo recibe los píxeles.
+  // Los cuatro canvas usan el mismo patrón: fetch raw → putImageData → GPU integrada.
+
+  // Canvas 1: Mapa de fase SLM (corrección perfecta) — escala de grises 1 byte/px
   drawRef.current = () => {
     fetch(`${API_BASE}/image/distorted-raw`)
       .then(res => res.arrayBuffer())
@@ -61,24 +84,109 @@ function App() {
         const gray = new Uint8Array(buffer);          // 640×360 = 230 400 bytes
         const rgba = new Uint8ClampedArray(gray.length * 4);
         for (let i = 0; i < gray.length; i++) {
-          rgba[i * 4] = gray[i];  // R
+          rgba[i * 4]     = gray[i];  // R
           rgba[i * 4 + 1] = gray[i];  // G
           rgba[i * 4 + 2] = gray[i];  // B
           rgba[i * 4 + 3] = 255;       // A
         }
         const ctx = canvasRef.current?.getContext('2d');
         if (ctx) ctx.putImageData(new ImageData(rgba, 640, 360), 0, 0);
-        loadedFramesRef.current += 1;
-        // Auto-loop solo en modo estocástico
-        if (methodRef.current === '2') {
-          loopIdRef.current = requestAnimationFrame(drawRef.current);
-        }
+        slmFramesCountRef.current += 1;
+        if (methodRef.current === '2') loopIdRef.current = requestAnimationFrame(drawRef.current);
       })
       .catch(() => {
-        // Reintento suave en caso de error de red
-        if (methodRef.current === '2') {
-          loopIdRef.current = requestAnimationFrame(drawRef.current);
+        if (methodRef.current === '2') loopIdRef.current = requestAnimationFrame(drawRef.current);
+      });
+  };
+
+  // Canvas 2: PSF con turbulencia (plano focal con aberración) — RGB 3 bytes/px
+  drawPsfRef.current = () => {
+    fetch(`${API_BASE}/image/psf-raw`)
+      .then(res => res.arrayBuffer())
+      .then(buffer => {
+        const rgb = new Uint8Array(buffer);           // 640×360×3 = 691 200 bytes
+        const numPixels = rgb.length / 3;
+        const rgba = new Uint8ClampedArray(numPixels * 4);
+        for (let i = 0; i < numPixels; i++) {
+          rgba[i * 4]     = rgb[i * 3];      // R
+          rgba[i * 4 + 1] = rgb[i * 3 + 1]; // G
+          rgba[i * 4 + 2] = rgb[i * 3 + 2]; // B
+          rgba[i * 4 + 3] = 255;             // A
         }
+        const ctx = psfCanvasRef.current?.getContext('2d');
+        if (ctx) ctx.putImageData(new ImageData(rgba, 640, 360), 0, 0);
+        turbPsfFramesCountRef.current += 1;
+        if (methodRef.current === '2') loopPsfIdRef.current = requestAnimationFrame(drawPsfRef.current);
+      })
+      .catch(() => {
+        if (methodRef.current === '2') loopPsfIdRef.current = requestAnimationFrame(drawPsfRef.current);
+      });
+  };
+
+  // Canvas 3: Mapa de fase CNN (corrección estimada) — escala de grises 1 byte/px
+  drawCnnPhaseRef.current = () => {
+    fetch(`${API_BASE}/image/cnn-phase-raw`)
+      .then(res => {
+        const acc = res.headers.get('X-CNN-Accuracy');
+        if (acc) {
+          if (methodRef.current === '2') {
+            accuracyListRef.current.push(parseFloat(acc));
+          } else {
+            setAvgAccuracy(parseFloat(acc));
+          }
+        }
+        return res.arrayBuffer();
+      })
+      .then(buffer => {
+        const gray = new Uint8Array(buffer);          // 640×360 = 230 400 bytes
+        const rgba = new Uint8ClampedArray(gray.length * 4);
+        for (let i = 0; i < gray.length; i++) {
+          rgba[i * 4]     = gray[i];
+          rgba[i * 4 + 1] = gray[i];
+          rgba[i * 4 + 2] = gray[i];
+          rgba[i * 4 + 3] = 255;
+        }
+        const ctx = cnnPhaseCanvasRef.current?.getContext('2d');
+        if (ctx) ctx.putImageData(new ImageData(rgba, 640, 360), 0, 0);
+        cnnPhaseFramesCountRef.current += 1;
+        if (methodRef.current === '2') loopCnnPhaseIdRef.current = requestAnimationFrame(drawCnnPhaseRef.current);
+      })
+      .catch(() => {
+        if (methodRef.current === '2') loopCnnPhaseIdRef.current = requestAnimationFrame(drawCnnPhaseRef.current);
+      });
+  };
+
+  // Canvas 4: PSF reconstruida (corregida por CNN) — RGB 3 bytes/px
+  drawReconPsfRef.current = () => {
+    fetch(`${API_BASE}/image/reconstructed-psf-raw`)
+      .then(res => {
+        const acc = res.headers.get('X-CNN-Accuracy');
+        if (acc) {
+          if (methodRef.current === '2') {
+            accuracyListRef.current.push(parseFloat(acc));
+          } else {
+            setAvgAccuracy(parseFloat(acc));
+          }
+        }
+        return res.arrayBuffer();
+      })
+      .then(buffer => {
+        const rgb = new Uint8Array(buffer);           // 640×360×3 = 691 200 bytes
+        const numPixels = rgb.length / 3;
+        const rgba = new Uint8ClampedArray(numPixels * 4);
+        for (let i = 0; i < numPixels; i++) {
+          rgba[i * 4]     = rgb[i * 3];      // R
+          rgba[i * 4 + 1] = rgb[i * 3 + 1]; // G
+          rgba[i * 4 + 2] = rgb[i * 3 + 2]; // B
+          rgba[i * 4 + 3] = 255;             // A
+        }
+        const ctx = reconPsfCanvasRef.current?.getContext('2d');
+        if (ctx) ctx.putImageData(new ImageData(rgba, 640, 360), 0, 0);
+        reconPsfFramesCountRef.current += 1;
+        if (methodRef.current === '2') loopReconPsfIdRef.current = requestAnimationFrame(drawReconPsfRef.current);
+      })
+      .catch(() => {
+        if (methodRef.current === '2') loopReconPsfIdRef.current = requestAnimationFrame(drawReconPsfRef.current);
       });
   };
 
@@ -93,6 +201,13 @@ function App() {
           if (res.data.state.wind_speed) setWindSpeed(res.data.state.wind_speed);
           if (res.data.state.zernikes) setZernikes(res.data.state.zernikes);
         }
+        // Pintar el primer frame de cada canvas
+        setTimeout(() => {
+          if (drawRef.current) drawRef.current();
+          if (drawPsfRef.current) drawPsfRef.current();
+          if (drawCnnPhaseRef.current) drawCnnPhaseRef.current();
+          if (drawReconPsfRef.current) drawReconPsfRef.current();
+        }, 150);
       })
       .catch(() => setSimOnline(false));
   }, []);
@@ -100,22 +215,48 @@ function App() {
   // Manejar loops automáticos para el Método 2 (Estocástico)
   useEffect(() => {
     let fpsIntervalId = null;
+    let accuracyIntervalId = null;
     let zernikeIntervalId = null;
 
     if (method === '2') {
       axios.post(`${API_BASE}/config`, { method: '2', d_r0, wind_speed: windSpeed })
         .catch(err => console.error("Error al iniciar modo estocástico:", err));
 
-      loadedFramesRef.current = 0;
+      slmFramesCountRef.current = 0;
+      turbPsfFramesCountRef.current = 0;
+      cnnPhaseFramesCountRef.current = 0;
+      reconPsfFramesCountRef.current = 0;
+      accuracyListRef.current = [];
 
-      // Arrancar el bucle GPU: fetch raw → canvas (auto-regulado por requestAnimationFrame)
+      // Arrancar los cuatro bucles GPU: fetch raw → canvas (auto-regulado por requestAnimationFrame)
       loopIdRef.current = requestAnimationFrame(drawRef.current);
+      loopPsfIdRef.current = requestAnimationFrame(drawPsfRef.current);
+      loopCnnPhaseIdRef.current = requestAnimationFrame(drawCnnPhaseRef.current);
+      loopReconPsfIdRef.current = requestAnimationFrame(drawReconPsfRef.current);
 
-      // Contador de FPS visible en la UI
+      // Contador de FPS visible en la UI para cada canal
       fpsIntervalId = setInterval(() => {
-        setFps(loadedFramesRef.current);
-        loadedFramesRef.current = 0;
+        setFpsSLM(slmFramesCountRef.current);
+        setFpsTurbPsf(turbPsfFramesCountRef.current);
+        setFpsCnnPhase(cnnPhaseFramesCountRef.current);
+        setFpsReconPsf(reconPsfFramesCountRef.current);
+        setFps(slmFramesCountRef.current);
+
+        slmFramesCountRef.current = 0;
+        turbPsfFramesCountRef.current = 0;
+        cnnPhaseFramesCountRef.current = 0;
+        reconPsfFramesCountRef.current = 0;
       }, 1000);
+
+      // Promediar precisión de la CNN cada 2 segundos
+      accuracyIntervalId = setInterval(() => {
+        if (accuracyListRef.current.length > 0) {
+          const sum = accuracyListRef.current.reduce((a, b) => a + b, 0);
+          const avg = sum / accuracyListRef.current.length;
+          setAvgAccuracy(avg);
+          accuracyListRef.current = [];
+        }
+      }, 2000);
 
       // Actualizar sliders con coeficientes dinámicos del backend
       zernikeIntervalId = setInterval(() => {
@@ -128,15 +269,34 @@ function App() {
           .catch(err => console.error("Error al actualizar Zernikes:", err));
       }, 200);
     } else {
-      // Detener el bucle GPU y volver a modo manual
+      // Detener los cuatro bucles GPU y volver a modo manual
       if (loopIdRef.current) cancelAnimationFrame(loopIdRef.current);
+      if (loopPsfIdRef.current) cancelAnimationFrame(loopPsfIdRef.current);
+      if (loopCnnPhaseIdRef.current) cancelAnimationFrame(loopCnnPhaseIdRef.current);
+      if (loopReconPsfIdRef.current) cancelAnimationFrame(loopReconPsfIdRef.current);
+      
+      setFpsSLM(0);
+      setFpsTurbPsf(0);
+      setFpsCnnPhase(0);
+      setFpsReconPsf(0);
+
       axios.post(`${API_BASE}/config`, { method: '1' })
+        .then(() => {
+          if (drawRef.current) drawRef.current();
+          if (drawPsfRef.current) drawPsfRef.current();
+          if (drawCnnPhaseRef.current) drawCnnPhaseRef.current();
+          if (drawReconPsfRef.current) drawReconPsfRef.current();
+        })
         .catch(err => console.error("Error al volver a modo manual:", err));
     }
 
     return () => {
       if (loopIdRef.current) cancelAnimationFrame(loopIdRef.current);
+      if (loopPsfIdRef.current) cancelAnimationFrame(loopPsfIdRef.current);
+      if (loopCnnPhaseIdRef.current) cancelAnimationFrame(loopCnnPhaseIdRef.current);
+      if (loopReconPsfIdRef.current) cancelAnimationFrame(loopReconPsfIdRef.current);
       if (fpsIntervalId) clearInterval(fpsIntervalId);
+      if (accuracyIntervalId) clearInterval(accuracyIntervalId);
       if (zernikeIntervalId) clearInterval(zernikeIntervalId);
     };
   }, [method]);
@@ -149,8 +309,11 @@ function App() {
     debounceRef.current = setTimeout(async () => {
       try {
         await axios.post(`${API_BASE}/config`, { zernikes: nextZernikes });
-        // Modo manual: pide un frame al simulador y lo pinta en canvas
+        // Modo manual: pide un frame a cada canvas
         drawRef.current();
+        drawPsfRef.current();
+        drawCnnPhaseRef.current();
+        drawReconPsfRef.current();
       } catch (err) {
         console.error('Error al actualizar Zernikes:', err);
       }
@@ -405,7 +568,10 @@ function App() {
               </div>
               <p>Simulador: <span className={simOnline ? 'text-emerald-400 font-semibold' : 'text-rose-400'}>{simOnline ? 'ONLINE' : 'OFFLINE'}</span></p>
               {method === '2' && (
-                <p>FPS Simulación: <span className="text-blue-400 font-semibold">{fps} FPS</span></p>
+                <>
+                  <p>FPS Simulación: <span className="text-blue-400 font-semibold">{fps} FPS</span></p>
+                  <p>Precisión CNN (2s): <span className="text-violet-400 font-semibold">{avgAccuracy.toFixed(2)}%</span></p>
+                </>
               )}
               <p>Inferencia: READY</p>
             </div>
@@ -423,40 +589,149 @@ function App() {
         {/* ── PANELES VISUALES ── */}
         <section className="flex-1 flex flex-col gap-6 w-full">
           {method === '1' || method === '2' ? (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 w-full animate-in fade-in duration-300">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full animate-in fade-in duration-300">
 
-              {/* Mapa de Fase SLM — Renderizado GPU via canvas (bytes raw de Prysm) */}
-              <div className="lab-panel p-4 flex flex-col h-[380px]">
-                <div className="mb-3">
-                  <span className="text-xs font-semibold text-white uppercase tracking-wider">MAPA DE FASE SLM</span>
-                  <p className="text-xs text-zinc-400 mt-0.5">
-                    {method === '1' ? 'Frente de onda · Prysm → bytes raw → Canvas GPU' : 'Turbulencia estocástica · Prysm → bytes raw → Canvas GPU'}
-                  </p>
-                </div>
-                <div className="flex-1 bg-black rounded border border-zinc-800 overflow-hidden flex items-center justify-center relative min-h-0">
-                  <canvas
-                    ref={canvasRef}
-                    width={640}
-                    height={360}
-                    className="w-full h-full object-contain"
-                    style={{ imageRendering: 'pixelated' }}
-                  />
-                  <div className="absolute top-2 left-2 font-mono text-[9px] text-zinc-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
-                    SLM_PHASE_MAP (Prysm·GPU)
+              {/* COLUMNA IZQUIERDA: SIMULADOR (CORRECCIÓN PERFECTA Y TURBULENCIA) */}
+              <div className="flex flex-col gap-6">
+                {/* 1. Mapa de Fase SLM (Corrección Perfecta) — Renderizado GPU via canvas (bytes raw de Prysm) */}
+                <div className="lab-panel p-4 flex flex-col h-[380px]">
+                  <div className="mb-3">
+                    <span className="text-xs font-semibold text-white uppercase tracking-wider">MAPA DE FASE SLM (CORRECCIÓN PERFECTA)</span>
+                    <p className="text-xs text-zinc-400 mt-0.5">
+                      {method === '1' ? 'Fase correctora conjugada · bytes raw → Canvas GPU' : 'Fase correctora dinámica · bytes raw → Canvas GPU'}
+                    </p>
                   </div>
-                  <div className="absolute top-2 right-2 font-mono text-[9px] text-blue-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
-                    GPU
+                  <div className="flex-1 bg-black rounded border border-zinc-800 overflow-hidden flex items-center justify-center relative min-h-0">
+                    <canvas
+                      ref={canvasRef}
+                      width={640}
+                      height={360}
+                      className="w-full h-full object-contain"
+                      style={{ imageRendering: 'pixelated' }}
+                    />
+                    <div className="absolute top-2 left-2 font-mono text-[9px] text-zinc-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
+                      SLM_CORRECTION_MAP (Prysm·GPU)
+                    </div>
+                    <div className="absolute top-2 right-2 flex gap-2">
+                      {method === '2' && (
+                        <span className="font-mono text-[9px] text-emerald-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800 animate-pulse">
+                          {fpsSLM} FPS
+                        </span>
+                      )}
+                      <span className="font-mono text-[9px] text-blue-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
+                        GPU
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. PSF con Turbulencia (Plano Focal) — Renderizado GPU via canvas (bytes raw de Prysm) */}
+                <div className="lab-panel p-4 flex flex-col h-[380px]">
+                  <div className="mb-3">
+                    <span className="text-xs font-semibold text-white uppercase tracking-wider">PSF CON TURBULENCIA</span>
+                    <p className="text-xs text-zinc-400 mt-0.5">
+                      Imagen del plano focal (Point Spread Function) con aberración
+                    </p>
+                  </div>
+                  <div className="flex-1 bg-black rounded border border-zinc-800 overflow-hidden flex items-center justify-center relative min-h-0">
+                    <canvas
+                      ref={psfCanvasRef}
+                      width={640}
+                      height={360}
+                      className="w-full h-full object-contain"
+                      style={{ imageRendering: 'pixelated' }}
+                    />
+                    <div className="absolute top-2 left-2 font-mono text-[9px] text-zinc-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
+                      FOCAL_PLANE_PSF (Prysm·GPU)
+                    </div>
+                    <div className="absolute top-2 right-2 flex gap-2">
+                      {method === '2' && (
+                        <span className="font-mono text-[9px] text-emerald-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800 animate-pulse">
+                          {fpsTurbPsf} FPS
+                        </span>
+                      )}
+                      <span className="font-mono text-[9px] text-blue-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
+                        GPU
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              {/* Frente de Onda Reconstruido (CNN) */}
-              <VisualPanel
-                title="FRENTE DE ONDA RECONSTRUIDO"
-                subtitle="Estimación de fase predicha por la red neuronal (CNN)"
-                src={psfImage}
-                label="RECONSTRUCTED_WAVEFRONT (CNN)"
-              />
+              {/* COLUMNA DERECHA: RECONSTRUCCIÓN IA (CNN Y PSF RECONSTRUIDA) */}
+              <div className="flex flex-col gap-6">
+
+                {/* 3. Mapa de Fase SLM (Corrección CNN) — canvas raw idéntico al panel 1 */}
+                <div className="lab-panel p-4 flex flex-col h-[380px]">
+                  <div className="mb-3 flex justify-between items-center">
+                    <div>
+                      <span className="text-xs font-semibold text-white uppercase tracking-wider">MAPA DE FASE SLM (CORRECCIÓN CNN)</span>
+                      <p className="text-xs text-zinc-400 mt-0.5">
+                        Fase correctora estimada por la Red Neuronal Convolucional
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] font-mono text-zinc-400">PRECISIÓN CNN (2s)</span>
+                      <p className="text-xs font-mono font-bold text-violet-400">{avgAccuracy.toFixed(2)}%</p>
+                    </div>
+                  </div>
+                  <div className="flex-1 bg-black rounded border border-zinc-800 overflow-hidden flex items-center justify-center relative min-h-0">
+                    <canvas
+                      ref={cnnPhaseCanvasRef}
+                      width={640}
+                      height={360}
+                      className="w-full h-full object-contain"
+                      style={{ imageRendering: 'pixelated' }}
+                    />
+                    <div className="absolute top-2 left-2 font-mono text-[9px] text-zinc-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
+                      SLM_CNN_PHASE_MAP (CNN·GPU)
+                    </div>
+                    <div className="absolute top-2 right-2 flex gap-2">
+                      {method === '2' && (
+                        <span className="font-mono text-[9px] text-emerald-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800 animate-pulse">
+                          {fpsCnnPhase} FPS
+                        </span>
+                      )}
+                      <span className="font-mono text-[9px] text-violet-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
+                        GPU
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. PSF RECONSTRUIDA — canvas raw RGB idéntico al panel 1 pero a color */}
+                <div className="lab-panel p-4 flex flex-col h-[380px]">
+                  <div className="mb-3">
+                    <span className="text-xs font-semibold text-white uppercase tracking-wider">PSF RECONSTRUIDA</span>
+                    <p className="text-xs text-zinc-400 mt-0.5">
+                      Imagen del plano focal corregido tras aplicar fase de la CNN
+                    </p>
+                  </div>
+                  <div className="flex-1 bg-black rounded border border-zinc-800 overflow-hidden flex items-center justify-center relative min-h-0">
+                    <canvas
+                      ref={reconPsfCanvasRef}
+                      width={640}
+                      height={360}
+                      className="w-full h-full object-contain"
+                      style={{ imageRendering: 'pixelated' }}
+                    />
+                    <div className="absolute top-2 left-2 font-mono text-[9px] text-zinc-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
+                      RECONSTRUCTED_PSF (Closed-Loop·GPU)
+                    </div>
+                    <div className="absolute top-2 right-2 flex gap-2">
+                      {method === '2' && (
+                        <span className="font-mono text-[9px] text-emerald-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800 animate-pulse">
+                          {fpsReconPsf} FPS
+                        </span>
+                      )}
+                      <span className="font-mono text-[9px] text-violet-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
+                        GPU
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
 
             </div>
           ) : (
@@ -534,7 +809,7 @@ function StatusBadge({ online, label }) {
   );
 }
 
-function VisualPanel({ title, subtitle, src, label, onLoad }) {
+function VisualPanel({ title, subtitle, src, label, onLoad, fps }) {
   return (
     <div className="lab-panel p-4 flex flex-col h-[380px]">
       <div className="mb-3">
@@ -546,6 +821,11 @@ function VisualPanel({ title, subtitle, src, label, onLoad }) {
         <div className="absolute top-2 left-2 font-mono text-[9px] text-zinc-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
           {label}
         </div>
+        {fps !== undefined && (
+          <div className="absolute top-2 right-2 font-mono text-[9px] text-emerald-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
+            {fps} FPS
+          </div>
+        )}
       </div>
     </div>
   );

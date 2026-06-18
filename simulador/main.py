@@ -5,6 +5,7 @@ import os
 import io
 import threading
 import time
+import requests
 from PIL import Image, ImageDraw, ImageFont
 from scipy.ndimage import zoom
 
@@ -74,8 +75,6 @@ perf_metrics = {
     "stochastic_loop_time": 0.0,
     "save_npy_count": 0,
     "save_npy_time": 0.0,
-    "get_image_count": 0,
-    "get_image_time": 0.0,
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -125,7 +124,9 @@ def generate_slm_phase_map(zernikes_dict: dict, size=PREVIEW) -> np.ndarray:
     edge = cache["edge"]
     cx, cy = cache["cx"], cache["cy"]
 
-    phase_wrapped = np.mod(phase_data, 2 * np.pi)
+    # Corrección perfecta es la fase opuesta conjugada
+    correction_phase = -phase_data
+    phase_wrapped = np.mod(correction_phase, 2 * np.pi)
     gray_val = np.round(phase_wrapped / (2 * np.pi) * 255).astype(np.uint8)
 
     img_gray = np.zeros((H, W), dtype=np.uint8)
@@ -140,57 +141,88 @@ def generate_slm_phase_map(zernikes_dict: dict, size=PREVIEW) -> np.ndarray:
     return rgb
 
 
-
-def generate_under_development(size=PREVIEW) -> np.ndarray:
+def generate_psf_image(zernikes_dict: dict, size=PREVIEW) -> np.ndarray:
     """
-    Genera una imagen informativa para frentes de onda en desarrollo/reconstrucción.
+    Genera la PSF (Point Spread Function) real con aberración usando propagación física de Prysm.
     """
-    W, H = size
-    img = Image.new("RGB", (W, H), (18, 18, 20))
-    draw = ImageDraw.Draw(img)
+    prop_size = (256, 256)
+    phase_data, cache = compute_phase_data(zernikes_dict, prop_size)
+    pupil = cache["pupil"]
     
-    for offset in range(-H, W, 40):
-        draw.line([offset, 0, offset + H, H], fill=(28, 28, 30), width=3)
+    # Wavefunction en el plano de la pupila: amplitud * exp(1j * fase)
+    # La amplitud es 1 en la pupila y 0 fuera
+    wf = np.exp(1j * phase_data) * pupil
+    
+    # Propagación al foco con factor de sobremuestreo Q=2
+    focal_wf = focus(wf, Q=2)
+    
+    # Intensidad de la PSF (módulo al cuadrado)
+    psf = np.abs(focal_wf) ** 2
+    
+    # Recortar el centro para hacer zoom sobre el foco
+    H, W = psf.shape
+    cy, cx = H // 2, W // 2
+    crop_half = 48  # Recorte de 96x96 píxeles para excelente visibilidad del spot
+    psf_crop = psf[cy - crop_half:cy + crop_half, cx - crop_half:cx + crop_half]
+    
+    # Normalizar
+    psf_max = np.max(psf_crop)
+    if psf_max > 0:
+        psf_norm = psf_crop / psf_max
+    else:
+        psf_norm = psf_crop
         
-    box_w, box_h = 420, 80
-    bx1 = (W - box_w) // 2
-    by1 = (H - box_h) // 2
-    bx2 = bx1 + box_w
-    by2 = by1 + box_h
+    # Escalar con una potencia (gamma 0.4) para ver los anillos de Airy secundarios
+    psf_scaled = np.power(psf_norm, 0.4)
     
-    draw.rectangle([bx1, by1, bx2, by2], fill=(24, 24, 27), outline=(63, 63, 70), width=1)
+    # Mapear a un colormap tipo 'calor/láser' (Rojo -> Naranja -> Blanco)
+    r = (psf_scaled * 255).astype(np.uint8)
+    g = (np.power(psf_scaled, 2.5) * 255).astype(np.uint8)
+    b = (np.power(psf_scaled, 5.0) * 255).astype(np.uint8)
     
-    text = "FRENTE DE ONDA RECONSTRUIDO"
-    subtitle = "Fase de Inferencia y Correccion por CNN"
+    rgb = np.stack([r, g, b], axis=-1)
     
+    img = Image.fromarray(rgb)
     try:
-        font = ImageFont.load_default()
-    except Exception:
-        font = None
-        
-    draw.text((W // 2 - 80, H // 2 - 15), text, fill=(239, 68, 68), font=font)
-    draw.text((W // 2 - 140, H // 2 + 5), subtitle, fill=(161, 161, 170), font=font)
+        resample = Image.Resampling.LANCZOS
+    except AttributeError:
+        resample = Image.LANCZOS
+    img_resized = img.resize(size, resample)
     
-    return np.array(img)
+    return np.array(img_resized)
 
 
-def save_wavefront_npy():
+
+
+def save_psf_npy():
     """
-    Exporta la matriz actual de frente de onda a un archivo .npy en el volumen compartido.
+    Calcula la PSF con aberración actual y la exporta como matriz 96x96 .npy al volumen compartido.
     """
     t_start = time.perf_counter()
     
-    res   = SLM_RES
-    size  = (res[0] // 4, res[1] // 4)
-    W, H  = size
-    
-    phase_data, cache = compute_phase_data(simulation_state['zernikes'], size)
+    prop_size = (256, 256)
+    phase_data, cache = compute_phase_data(simulation_state['zernikes'], prop_size)
     pupil = cache["pupil"]
     
-    phase_clean = np.zeros((H, W), dtype=np.float32)
-    phase_clean[pupil] = phase_data[pupil]
+    # Propagación física a PSF
+    wf = np.exp(1j * phase_data) * pupil
+    focal_wf = focus(wf, Q=2)
+    psf = np.abs(focal_wf) ** 2
+    
+    # Recorte central 96x96
+    H, W = psf.shape
+    cy, cx = H // 2, W // 2
+    crop_half = 48
+    psf_crop = psf[cy - crop_half:cy + crop_half, cx - crop_half:cx + crop_half]
+    
+    # Normalización (0.0 a 1.0)
+    psf_max = np.max(psf_crop)
+    if psf_max > 0:
+        psf_norm = psf_crop / psf_max
+    else:
+        psf_norm = psf_crop
 
-    np.save(os.path.join(SHARED_DIR, "frente_onda.npy"), phase_clean)
+    np.save(os.path.join(SHARED_DIR, "psf.npy"), psf_norm.astype(np.float32))
     
     # Perfilado
     elapsed = time.perf_counter() - t_start
@@ -198,7 +230,7 @@ def save_wavefront_npy():
     perf_metrics["save_npy_time"] += elapsed
     if perf_metrics["save_npy_count"] % 100 == 0:
         avg_ms = (perf_metrics["save_npy_time"] / 100) * 1000
-        print(f"[PERF] Guardar Matrix (.npy) en Vol. Compartido (100 escrituras): Promedio {avg_ms:.3f} ms", flush=True)
+        print(f"[PERF] Guardar PSF (.npy) en Vol. Compartido (100 escrituras): Promedio {avg_ms:.3f} ms", flush=True)
         perf_metrics["save_npy_time"] = 0.0
 
 
@@ -232,7 +264,7 @@ def update_stochastic_turbulence_loop():
                         new_val = alpha * current_val + sigma * beta_coeff * noise
                         simulation_state["zernikes"][k] = float(new_val)
                     
-                    save_wavefront_npy()
+                    save_psf_npy()
                     
                     # Perfilado
                     elapsed = time.perf_counter() - t_start
@@ -288,7 +320,7 @@ def update_config():
             if k in simulation_state['zernikes']:
                 simulation_state['zernikes'][k] = float(v)
 
-    save_wavefront_npy()
+    save_psf_npy()
 
     return jsonify({
         "message": "Configuración SLM actualizada con éxito",
@@ -296,32 +328,22 @@ def update_config():
     })
 
 
-@app.route('/image/psf', methods=['GET'])
-def get_psf_placeholder():
-    t_start = time.perf_counter()
-    
-    rgb = generate_under_development()
 
-    img    = Image.fromarray(rgb)
-    img_io = io.BytesIO()
-    img.save(img_io, 'JPEG', quality=85)
-    img_io.seek(0)
-    
-    response = send_file(img_io, mimetype='image/jpeg')
-    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    
-    # Perfilado
-    elapsed = time.perf_counter() - t_start
-    perf_metrics["get_image_count"] += 1
-    perf_metrics["get_image_time"] += elapsed
-    if perf_metrics["get_image_count"] % 50 == 0:
-        avg_ms = (perf_metrics["get_image_time"] / 50) * 1000
-        print(f"[PERF] Generar y Servir Imagen JPEG PSF (50 peticiones): Promedio {avg_ms:.3f} ms", flush=True)
-        perf_metrics["get_image_time"] = 0.0
-        
+@app.route('/image/psf-raw', methods=['GET'])
+def get_psf_raw():
+    """
+    Devuelve la PSF con turbulencia (aberrada real) como bytes RGB crudos (sin compresión).
+    Formato: (H x W x 3) uint8 en orden row-major, 3 bytes por píxel (R, G, B).
+    """
+    rgb = generate_psf_image(simulation_state['zernikes'])
+    rgb_bytes = rgb.tobytes()
+    response = make_response(rgb_bytes)
+    response.headers['Content-Type']  = 'application/octet-stream'
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    response.headers['Pragma']        = 'no-cache'
+    response.headers['Expires']       = '0'
     return response
+
 
 
 @app.route('/image/distorted-raw', methods=['GET'])
@@ -346,6 +368,86 @@ def get_image_raw():
     elapsed = time.perf_counter() - t_start
     print(f"[PERF] Raw bytes ({len(gray_bytes)} B): {elapsed*1000:.2f} ms", flush=True) if elapsed > 0.005 else None
 
+    return response
+
+
+@app.route('/image/cnn-phase-raw', methods=['GET'])
+def get_cnn_phase_raw():
+    """
+    Devuelve el mapa de fase de corrección estimado por la CNN como bytes grises crudos.
+    Formato idéntico a /image/distorted-raw: (H x W) uint8, 1 byte por píxel.
+    El canvas de la interfaz lo pinta directamente con putImageData (GPU integrada del navegador).
+    """
+    accuracy = 100.0
+    try:
+        resp = requests.get("http://ao_inferencia:5000/predict", timeout=1.0)
+        if resp.status_code == 200:
+            pred_list = resp.json().get("zernike", [])
+            cnn_zernikes = {f"Z{i}": pred_list[i-1] for i in range(1, min(12, len(pred_list) + 1))}
+            for idx in range(1, 12):
+                cnn_zernikes.setdefault(f"Z{idx}", 0.0)
+            rgb = generate_slm_phase_map(cnn_zernikes)
+            
+            # Calcular precisión
+            actuals = np.array([simulation_state['zernikes'].get(f"Z{i}", 0.0) for i in range(1, 12)])
+            preds = np.array([cnn_zernikes.get(f"Z{i}", 0.0) for i in range(1, 12)])
+            mae = np.mean(np.abs(actuals - preds))
+            accuracy = float(100.0 * np.exp(-mae))
+        else:
+            rgb = generate_slm_phase_map({f"Z{i}": 0.0 for i in range(1, 12)})
+    except Exception:
+        rgb = generate_slm_phase_map({f"Z{i}": 0.0 for i in range(1, 12)})
+
+    gray_bytes = rgb[:, :, 0].tobytes()
+    response = make_response(gray_bytes)
+    response.headers['Content-Type']  = 'application/octet-stream'
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    response.headers['Pragma']        = 'no-cache'
+    response.headers['Expires']       = '0'
+    response.headers['Access-Control-Expose-Headers'] = 'X-CNN-Accuracy'
+    response.headers['X-CNN-Accuracy'] = f"{accuracy:.2f}"
+    return response
+
+
+@app.route('/image/reconstructed-psf-raw', methods=['GET'])
+def get_reconstructed_psf_raw():
+    """
+    Devuelve la PSF corregida (aberración real - predicción CNN) como bytes RGB crudos.
+    Formato: (H x W x 3) uint8 en orden row-major, 3 bytes por píxel (R, G, B).
+    El canvas de la interfaz lo reconstruye a RGBA y lo pinta con putImageData.
+    """
+    accuracy = 100.0
+    try:
+        resp = requests.get("http://ao_inferencia:5000/predict", timeout=1.0)
+        if resp.status_code == 200:
+            pred_list = resp.json().get("zernike", [])
+            cnn_zernikes = {f"Z{i}": pred_list[i-1] for i in range(1, min(12, len(pred_list) + 1))}
+            residual = {}
+            for idx in range(1, 12):
+                key = f"Z{idx}"
+                actual = simulation_state['zernikes'].get(key, 0.0)
+                pred   = cnn_zernikes.get(key, 0.0)
+                residual[key] = actual - pred
+            rgb = generate_psf_image(residual)
+            
+            # Calcular precisión
+            actuals = np.array([simulation_state['zernikes'].get(f"Z{i}", 0.0) for i in range(1, 12)])
+            preds = np.array([cnn_zernikes.get(f"Z{i}", 0.0) for i in range(1, 12)])
+            mae = np.mean(np.abs(actuals - preds))
+            accuracy = float(100.0 * np.exp(-mae))
+        else:
+            rgb = generate_psf_image({f"Z{i}": 0.0 for i in range(1, 12)})
+    except Exception:
+        rgb = generate_psf_image({f"Z{i}": 0.0 for i in range(1, 12)})
+
+    rgb_bytes = rgb.tobytes()   # (H, W, 3) → H*W*3 bytes en orden R,G,B por píxel
+    response = make_response(rgb_bytes)
+    response.headers['Content-Type']  = 'application/octet-stream'
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    response.headers['Pragma']        = 'no-cache'
+    response.headers['Expires']       = '0'
+    response.headers['Access-Control-Expose-Headers'] = 'X-CNN-Accuracy'
+    response.headers['X-CNN-Accuracy'] = f"{accuracy:.2f}"
     return response
 
 

@@ -31,6 +31,13 @@ services:
     volumes:
       - ./inferencia:/app
       - shared_data:/app/shared
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     networks:
       - ao_pipeline_net
 
