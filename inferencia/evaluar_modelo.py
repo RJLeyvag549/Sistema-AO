@@ -1,37 +1,31 @@
 import os
+import argparse
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from model import BaselineCNN
-from dataset import PSFDataset
+from dataset import PSFGeneratorDataset
 
 def evaluate():
-    # Detectar si estamos dentro de Docker o en Windows Host
-    # Dentro de Docker /app/shared es la ruta estándar. En Windows local, si no existe,
-    # el usuario puede indicar la ruta local.
+    parser = argparse.ArgumentParser(description="Evaluación de modelos de Óptica Adaptativa")
+    parser.add_argument("--model", type=str, default="phase_diversity", choices=["phase_diversity", "resnet10"],
+                        help="Modelo a evaluar: phase_diversity, resnet10")
+    args = parser.parse_args()
+    model_type = args.model
+
     is_docker = os.path.exists("/app/shared")
     
     if is_docker:
-        val_path = "/app/shared/dataset/val"
-        model_path = "/app/shared/custom_cnn.pth"
-        output_plot_path = "/app/shared/zernike_correlation.png"
+        model_path = f"/app/shared/{model_type}_cnn.pth"
+        output_plot_path = f"/app/shared/{model_type}_correlation.png"
     else:
-        # Rutas por defecto en el host local si el volumen compartido no está montado directamente
-        # (Se puede ajustar si el usuario tiene una copia local del dataset)
-        val_path = "./simulador/shared/dataset/val"
-        model_path = "./simulador/shared/custom_cnn.pth"
-        output_plot_path = "./zernike_correlation.png"
+        model_path = f"./simulador/shared/{model_type}_cnn.pth"
+        output_plot_path = f"./{model_type}_correlation.png"
         
-    print(f"Buscando datos en: {val_path}")
-    print(f"Buscando modelo en: {model_path}")
+    print(f"Evaluando modelo: {model_type.upper()}")
+    print(f"Buscando pesos del modelo en: {model_path}")
     
-    if not os.path.exists(val_path):
-        print(f"Error: Dataset de validación no encontrado en {val_path}")
-        print("Sugerencia: Ejecuta el script dentro del contenedor con:")
-        print("  docker exec ao_inferencia python evaluar_modelo.py")
-        return
-        
     if not os.path.exists(model_path):
         print(f"Error: Modelo no encontrado en {model_path}")
         return
@@ -39,10 +33,16 @@ def evaluate():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Evaluando en dispositivo: {device}")
     
-    dataset = PSFDataset(val_path, normalize_labels=True)
+    # Generar 2000 muestras al vuelo de validación
+    dataset = PSFGeneratorDataset(num_samples=2000, model_type=model_type)
     loader = DataLoader(dataset, batch_size=64, shuffle=False)
     
-    model = BaselineCNN().to(device)
+    in_channels = 2
+    if model_type == "resnet10":
+        from model_resnet import ResNet10
+        model = ResNet10(in_channels=in_channels).to(device)
+    else:
+        model = BaselineCNN(in_channels=in_channels).to(device)
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
     
@@ -64,16 +64,13 @@ def evaluate():
     mean_mae = np.mean(maes)
     accuracy = 100.0 * np.exp(-mean_mae)
     
-    print("\n=== METRICAS DEL MODELO ACTUAL ===")
+    print("\n=== METRICAS DEL MODELO EVALUADO ===")
     print(f"Total muestras evaluadas: {len(all_preds)}")
     print(f"MAE Normalizado promedio: {mean_mae:.6f}")
     print(f"Precisión global (100 * exp(-MAE)): {accuracy:.2f}%")
     print("===================================\n")
     
-    # Generar la "Matriz de Correlación" (Actual vs Predicho para cada uno de los 11 Zernikes)
-    # Como es un problema de regresión continua, la matriz de confusión equivalente es el gráfico
-    # de dispersión (Scatter Plot) de Valores Reales vs Predichos para cada variable.
-    
+    # Generar gráficos de correlación
     print(f"Generando gráficos de correlación (Actual vs Predicho) en {output_plot_path}...")
     fig, axes = plt.subplots(4, 3, figsize=(15, 18))
     axes = axes.ravel()
@@ -95,7 +92,7 @@ def evaluate():
         max_val = max(y_true.max(), y_pred.max())
         ax.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label="Ideal (y=x)")
         
-        # Calcular R2 o correlación de Pearson
+        # Calcular correlación
         r = np.corrcoef(y_true, y_pred)[0, 1] if np.std(y_true) > 0 and np.std(y_pred) > 0 else 0.0
         mae_mode = maes[i]
         
@@ -105,7 +102,6 @@ def evaluate():
         ax.grid(True, linestyle="--", alpha=0.5)
         ax.legend()
         
-    # Ocultar el 12º subplot vacío
     axes[11].axis('off')
     
     plt.tight_layout()

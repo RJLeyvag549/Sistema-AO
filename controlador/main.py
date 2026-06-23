@@ -8,7 +8,7 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# Configuración
+# Configuraci├│n
 INFERENCIA_URL = "http://inferencia:5000/predict"
 SIMULADOR_URL = "http://simulador:5000/correct"
 
@@ -22,7 +22,7 @@ def status():
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 
-# Configuración InfluxDB
+# Configuraci├│n InfluxDB
 DB_URL = "http://ao_database:8086"
 DB_TOKEN = os.environ.get("INFLUXDB_TOKEN", "token_provisorio_de_github")
 DB_ORG = os.environ.get("INFLUXDB_ORG", "organizacion_ao")
@@ -55,7 +55,7 @@ def calibrate():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 def logic_loop():
-    print("--- CONTROLADOR AO: REGISTRO DE TELEMETRÍA DE TURBULENCIA INICIADO ---", flush=True)
+    print("--- CONTROLADOR AO: REGISTRO DE TELEMETR├ìA DE TURBULENCIA INICIADO ---", flush=True)
     while True:
         try:
             # 1. Obtener el estado actual de la turbulencia del simulador
@@ -76,17 +76,17 @@ def logic_loop():
                         .tag("method", method) \
                         .field("d_r0", float(d_r0))
                     
-                    # Añadir cada uno de los 11 coeficientes a la telemetría
+                    # A├▒adir cada uno de los 11 coeficientes a la telemetr├¡a
                     for z_key, z_val in zernikes.items():
                         point.field(z_key.lower(), float(z_val))
                         
                     point.time(time.time_ns(), WritePrecision.NS)
                     write_api.write(bucket=DB_BUCKET, record=point)
             
-            # Registrar cada 500 ms (frecuencia de 2 Hz para no saturar y tener buena resolución)
+            # Registrar cada 500 ms (frecuencia de 2 Hz para no saturar y tener buena resoluci├│n)
             time.sleep(0.5)
         except Exception as e:
-            print(f"[CONTROLADOR] Error en ciclo de registro de telemetría: {e}", flush=True)
+            print(f"[CONTROLADOR] Error en ciclo de registro de telemetr├¡a: {e}", flush=True)
             time.sleep(3)
 
 if __name__ == '__main__':

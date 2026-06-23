@@ -21,6 +21,8 @@ const ZERNIKE_MODES = [
 
 function App() {
   const [method, setMethod] = useState('1'); // '1', '2', '3', or '4'
+  const [activeModel, setActiveModel] = useState('phase_diversity');
+
   const [zernikes, setZernikes] = useState({
     Z1: 0.0,
     Z2: 0.0,
@@ -46,6 +48,25 @@ function App() {
   const [fpsCnnPhase, setFpsCnnPhase] = useState(0);
   const [fpsReconPsf, setFpsReconPsf] = useState(0);
   const [avgAccuracy, setAvgAccuracy] = useState(100.0);
+  const [isModelSwitching, setIsModelSwitching] = useState(false);
+
+  // ── SISTEMA DE LOGS EN TIEMPO REAL ──────────────────────────────────────────
+  const [debugLogs, setDebugLogs] = useState([]);
+  const logBufferRef = useRef([]);       // buffer circular sin re-render por cada entrada
+  const logFlushTimerRef = useRef(null); // timer para flush en lote cada 300ms
+
+  const addLog = (level, msg) => {
+    const ts = new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
+    const entry = { ts, level, msg, id: Date.now() + Math.random() };
+    logBufferRef.current = [entry, ...logBufferRef.current].slice(0, 80);
+    // Flush en lote para no provocar 60 re-renders/seg
+    if (!logFlushTimerRef.current) {
+      logFlushTimerRef.current = setTimeout(() => {
+        setDebugLogs([...logBufferRef.current]);
+        logFlushTimerRef.current = null;
+      }, 300);
+    }
+  };
 
   const debounceRef = useRef(null);
   const slmFramesCountRef = useRef(0);
@@ -66,11 +87,19 @@ function App() {
   const loopPsfIdRef = useRef(null);     // ID de requestAnimationFrame del bucle PSF
   const loopCnnPhaseIdRef = useRef(null);
   const loopReconPsfIdRef = useRef(null);
+  // Flags anti-acumulación: evitan lanzar un nuevo fetch si el anterior aún está en vuelo
+  const cnnPhaseInFlightRef = useRef(false);
+  const reconPsfInFlightRef = useRef(false);
 
   const methodRef = useRef(method);
   useEffect(() => {
     methodRef.current = method;
   }, [method]);
+
+  const isModelSwitchingRef = useRef(isModelSwitching);
+  useEffect(() => {
+    isModelSwitchingRef.current = isModelSwitching;
+  }, [isModelSwitching]);
 
   // ── RENDER GPU: fetch bytes raw del simulador y pinta en canvas ──────────────
   // La física (Prysm) vive en el simulador. El browser solo recibe los píxeles.
@@ -92,10 +121,14 @@ function App() {
         const ctx = canvasRef.current?.getContext('2d');
         if (ctx) ctx.putImageData(new ImageData(rgba, 640, 360), 0, 0);
         slmFramesCountRef.current += 1;
-        if (methodRef.current === '2') loopIdRef.current = requestAnimationFrame(drawRef.current);
+        if (methodRef.current === '2') setTimeout(() => {
+          loopIdRef.current = requestAnimationFrame(drawRef.current);
+        }, 40);
       })
       .catch(() => {
-        if (methodRef.current === '2') loopIdRef.current = requestAnimationFrame(drawRef.current);
+        if (methodRef.current === '2') setTimeout(() => {
+          loopIdRef.current = requestAnimationFrame(drawRef.current);
+        }, 40);
       });
   };
 
@@ -116,17 +149,42 @@ function App() {
         const ctx = psfCanvasRef.current?.getContext('2d');
         if (ctx) ctx.putImageData(new ImageData(rgba, 640, 360), 0, 0);
         turbPsfFramesCountRef.current += 1;
-        if (methodRef.current === '2') loopPsfIdRef.current = requestAnimationFrame(drawPsfRef.current);
+        if (methodRef.current === '2') setTimeout(() => {
+          loopPsfIdRef.current = requestAnimationFrame(drawPsfRef.current);
+        }, 40);
       })
       .catch(() => {
-        if (methodRef.current === '2') loopPsfIdRef.current = requestAnimationFrame(drawPsfRef.current);
+        if (methodRef.current === '2') setTimeout(() => {
+          loopPsfIdRef.current = requestAnimationFrame(drawPsfRef.current);
+        }, 40);
       });
   };
 
   // Canvas 3: Mapa de fase CNN (corrección estimada) — escala de grises 1 byte/px
+  // Throttling adaptativo + flag inFlight para no acumular peticiones pendientes.
   drawCnnPhaseRef.current = () => {
+    if (isModelSwitchingRef.current) {
+      if (methodRef.current === '2') {
+        loopCnnPhaseIdRef.current = requestAnimationFrame(drawCnnPhaseRef.current);
+      }
+      return;
+    }
+    if (cnnPhaseInFlightRef.current) {
+      if (methodRef.current === '2') {
+        loopCnnPhaseIdRef.current = requestAnimationFrame(drawCnnPhaseRef.current);
+      }
+      return;
+    }
+    cnnPhaseInFlightRef.current = true;
     fetch(`${API_BASE}/image/cnn-phase-raw`)
       .then(res => {
+        if (!res.ok) {
+          cnnPhaseInFlightRef.current = false;
+          if (methodRef.current === '2') {
+            loopCnnPhaseIdRef.current = requestAnimationFrame(drawCnnPhaseRef.current);
+          }
+          throw new Error(`CNN_PHASE HTTP ${res.status}`);
+        }
         const acc = res.headers.get('X-CNN-Accuracy');
         if (acc) {
           if (methodRef.current === '2') {
@@ -138,7 +196,7 @@ function App() {
         return res.arrayBuffer();
       })
       .then(buffer => {
-        const gray = new Uint8Array(buffer);          // 640×360 = 230 400 bytes
+        const gray = new Uint8Array(buffer);
         const rgba = new Uint8ClampedArray(gray.length * 4);
         for (let i = 0; i < gray.length; i++) {
           rgba[i * 4]     = gray[i];
@@ -149,17 +207,44 @@ function App() {
         const ctx = cnnPhaseCanvasRef.current?.getContext('2d');
         if (ctx) ctx.putImageData(new ImageData(rgba, 640, 360), 0, 0);
         cnnPhaseFramesCountRef.current += 1;
-        if (methodRef.current === '2') loopCnnPhaseIdRef.current = requestAnimationFrame(drawCnnPhaseRef.current);
+        cnnPhaseInFlightRef.current = false;
+        if (methodRef.current === '2') {
+          loopCnnPhaseIdRef.current = requestAnimationFrame(drawCnnPhaseRef.current);
+        }
       })
       .catch(() => {
-        if (methodRef.current === '2') loopCnnPhaseIdRef.current = requestAnimationFrame(drawCnnPhaseRef.current);
+        cnnPhaseInFlightRef.current = false;
+        if (methodRef.current === '2') {
+          loopCnnPhaseIdRef.current = requestAnimationFrame(drawCnnPhaseRef.current);
+        }
       });
   };
 
   // Canvas 4: PSF reconstruida (corregida por CNN) — RGB 3 bytes/px
+  // Throttling adaptativo + flag inFlight para no acumular peticiones pendientes.
   drawReconPsfRef.current = () => {
+    if (isModelSwitchingRef.current) {
+      if (methodRef.current === '2') {
+        loopReconPsfIdRef.current = requestAnimationFrame(drawReconPsfRef.current);
+      }
+      return;
+    }
+    if (reconPsfInFlightRef.current) {
+      if (methodRef.current === '2') {
+        loopReconPsfIdRef.current = requestAnimationFrame(drawReconPsfRef.current);
+      }
+      return;
+    }
+    reconPsfInFlightRef.current = true;
     fetch(`${API_BASE}/image/reconstructed-psf-raw`)
       .then(res => {
+        if (!res.ok) {
+          reconPsfInFlightRef.current = false;
+          if (methodRef.current === '2') {
+            loopReconPsfIdRef.current = requestAnimationFrame(drawReconPsfRef.current);
+          }
+          throw new Error(`RECON_PSF HTTP ${res.status}`);
+        }
         const acc = res.headers.get('X-CNN-Accuracy');
         if (acc) {
           if (methodRef.current === '2') {
@@ -171,22 +256,28 @@ function App() {
         return res.arrayBuffer();
       })
       .then(buffer => {
-        const rgb = new Uint8Array(buffer);           // 640×360×3 = 691 200 bytes
+        const rgb = new Uint8Array(buffer);
         const numPixels = rgb.length / 3;
         const rgba = new Uint8ClampedArray(numPixels * 4);
         for (let i = 0; i < numPixels; i++) {
-          rgba[i * 4]     = rgb[i * 3];      // R
-          rgba[i * 4 + 1] = rgb[i * 3 + 1]; // G
-          rgba[i * 4 + 2] = rgb[i * 3 + 2]; // B
-          rgba[i * 4 + 3] = 255;             // A
+          rgba[i * 4]     = rgb[i * 3];
+          rgba[i * 4 + 1] = rgb[i * 3 + 1];
+          rgba[i * 4 + 2] = rgb[i * 3 + 2];
+          rgba[i * 4 + 3] = 255;
         }
         const ctx = reconPsfCanvasRef.current?.getContext('2d');
         if (ctx) ctx.putImageData(new ImageData(rgba, 640, 360), 0, 0);
         reconPsfFramesCountRef.current += 1;
-        if (methodRef.current === '2') loopReconPsfIdRef.current = requestAnimationFrame(drawReconPsfRef.current);
+        reconPsfInFlightRef.current = false;
+        if (methodRef.current === '2') {
+          loopReconPsfIdRef.current = requestAnimationFrame(drawReconPsfRef.current);
+        }
       })
       .catch(() => {
-        if (methodRef.current === '2') loopReconPsfIdRef.current = requestAnimationFrame(drawReconPsfRef.current);
+        reconPsfInFlightRef.current = false;
+        if (methodRef.current === '2') {
+          loopReconPsfIdRef.current = requestAnimationFrame(drawReconPsfRef.current);
+        }
       });
   };
 
@@ -197,6 +288,7 @@ function App() {
         setSimOnline(true);
         if (res.data && res.data.state) {
           if (res.data.state.method) setMethod(res.data.state.method);
+          if (res.data.state.active_model) setActiveModel(res.data.state.active_model);
           if (res.data.state.d_r0) setDR0(res.data.state.d_r0);
           if (res.data.state.wind_speed) setWindSpeed(res.data.state.wind_speed);
           if (res.data.state.zernikes) setZernikes(res.data.state.zernikes);
@@ -211,6 +303,46 @@ function App() {
       })
       .catch(() => setSimOnline(false));
   }, []);
+
+  const handleModelChange = async (model) => {
+    addLog('INFO', `MODEL_SWITCH → ${model} | método=${methodRef.current}`);
+    setActiveModel(model);
+    // Actualizar ref inmediatamente (no esperar al re-render del useEffect)
+    isModelSwitchingRef.current = true;
+    setIsModelSwitching(true);
+    addLog('INFO', 'MODEL_SWITCH: isModelSwitchingRef=true | loops CNN pausados');
+    try {
+      await axios.post(`${API_BASE}/config`, { active_model: model });
+      addLog('INFO', 'MODEL_SWITCH: POST /config OK — esperando 800ms estabilización');
+      setTimeout(() => {
+        addLog('INFO', `MODEL_SWITCH: 800ms fin | cnnInFlight=${cnnPhaseInFlightRef.current} reconInFlight=${reconPsfInFlightRef.current}`);
+        // 1. Resetear flags inFlight ANTES de desbloquear
+        cnnPhaseInFlightRef.current = false;
+        reconPsfInFlightRef.current = false;
+        // 2. Desbloquear loops CNN
+        isModelSwitchingRef.current = false;
+        setIsModelSwitching(false);
+        addLog('INFO', `MODEL_SWITCH: desbloqueado | método=${methodRef.current}`);
+        // 3. En método 2 los loops se auto-reanudan; en método 1 pedir frames manualmente
+        if (methodRef.current !== '2') {
+          addLog('DEBUG', 'MODEL_SWITCH: método 1 → pedir frames manuales');
+          if (drawRef.current) drawRef.current();
+          if (drawPsfRef.current) drawPsfRef.current();
+          if (drawCnnPhaseRef.current) drawCnnPhaseRef.current();
+          if (drawReconPsfRef.current) drawReconPsfRef.current();
+        } else {
+          addLog('DEBUG', 'MODEL_SWITCH: método 2 → loops se reanudan solos');
+        }
+      }, 800);
+    } catch (err) {
+      addLog('ERROR', `MODEL_SWITCH POST FAIL: ${err.message}`);
+      cnnPhaseInFlightRef.current = false;
+      reconPsfInFlightRef.current = false;
+      isModelSwitchingRef.current = false;
+      setIsModelSwitching(false);
+    }
+  };
+
 
   // Manejar loops automáticos para el Método 2 (Estocástico)
   useEffect(() => {
@@ -274,6 +406,9 @@ function App() {
       if (loopPsfIdRef.current) cancelAnimationFrame(loopPsfIdRef.current);
       if (loopCnnPhaseIdRef.current) cancelAnimationFrame(loopCnnPhaseIdRef.current);
       if (loopReconPsfIdRef.current) cancelAnimationFrame(loopReconPsfIdRef.current);
+      // Resetear flags inFlight para no quedar bloqueados al volver a modo 2
+      cnnPhaseInFlightRef.current = false;
+      reconPsfInFlightRef.current = false;
       
       setFpsSLM(0);
       setFpsTurbPsf(0);
@@ -406,6 +541,22 @@ function App() {
                 <option value="2">2. Turbulencia Estocástica (Kolmogorov)</option>
               </select>
             </div>
+
+            {/* Selectbox para el Modelo de Red Neuronal */}
+            <div className="flex flex-col gap-2 mb-4">
+              <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                Modelo de Red Neuronal (CNN)
+              </label>
+              <select
+                value={activeModel}
+                onChange={(e) => handleModelChange(e.target.value)}
+                className="w-full bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs rounded p-2.5 outline-none focus:border-zinc-700 font-sans"
+              >
+                <option value="phase_diversity">Modelo A (Phase Diversity - 2 Ch)</option>
+                <option value="resnet10">Modelo ResNet-10 (Phase Diversity - 2 Ch)</option>
+              </select>
+            </div>
+
 
 
             {/* Sección Dinámica: 11 Polinomios de Zernike */}
@@ -575,6 +726,45 @@ function App() {
               )}
               <p>Inferencia: READY</p>
             </div>
+
+            {/* Panel de Logs en tiempo real */}
+            <div className="mt-4 pt-4 border-t border-zinc-800">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-zinc-500 font-sans font-medium text-[11px] uppercase tracking-wider">
+                  Logs CNN en Tiempo Real
+                </span>
+                <button
+                  onClick={() => { logBufferRef.current = []; setDebugLogs([]); }}
+                  className="text-[9px] text-zinc-600 hover:text-zinc-400 font-mono uppercase tracking-wider transition-colors"
+                >
+                  limpiar
+                </button>
+              </div>
+              <div
+                className="h-48 overflow-y-auto flex flex-col-reverse gap-0.5 bg-black/40 rounded border border-zinc-800 p-2"
+                style={{ fontFamily: 'monospace' }}
+              >
+                {debugLogs.length === 0 ? (
+                  <span className="text-zinc-700 text-[9px] italic">Sin eventos aún...</span>
+                ) : (
+                  debugLogs.map(entry => (
+                    <div key={entry.id} className="flex gap-1.5 text-[9px] leading-relaxed">
+                      <span className="text-zinc-600 shrink-0">{entry.ts}</span>
+                      <span className={{
+                        'INFO':  'text-emerald-400',
+                        'WARN':  'text-amber-400',
+                        'ERROR': 'text-rose-400',
+                        'DEBUG': 'text-zinc-500',
+                      }[entry.level] ?? 'text-zinc-400'}
+                      >
+                        [{entry.level}]
+                      </span>
+                      <span className="text-zinc-300 break-all">{entry.msg}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
 
           <button
@@ -680,9 +870,15 @@ function App() {
                       ref={cnnPhaseCanvasRef}
                       width={640}
                       height={360}
-                      className="w-full h-full object-contain"
+                      className={`w-full h-full object-contain ${isModelSwitching ? 'opacity-25' : ''}`}
                       style={{ imageRendering: 'pixelated' }}
                     />
+                    {isModelSwitching && (
+                      <div className="absolute inset-0 bg-black/60 backdrop-blur-xs flex flex-col items-center justify-center gap-3 animate-in fade-in duration-200">
+                        <div className="w-8 h-8 border-2 border-violet-500/20 border-t-violet-400 rounded-full animate-spin" />
+                        <span className="text-[10px] font-mono text-zinc-400 uppercase tracking-widest animate-pulse">Estabilizando CPU / Cargando pesos...</span>
+                      </div>
+                    )}
                     <div className="absolute top-2 left-2 font-mono text-[9px] text-zinc-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
                       SLM_CNN_PHASE_MAP (CNN·GPU)
                     </div>
@@ -712,9 +908,15 @@ function App() {
                       ref={reconPsfCanvasRef}
                       width={640}
                       height={360}
-                      className="w-full h-full object-contain"
+                      className={`w-full h-full object-contain ${isModelSwitching ? 'opacity-25' : ''}`}
                       style={{ imageRendering: 'pixelated' }}
                     />
+                    {isModelSwitching && (
+                      <div className="absolute inset-0 bg-black/60 backdrop-blur-xs flex flex-col items-center justify-center gap-3 animate-in fade-in duration-200">
+                        <div className="w-8 h-8 border-2 border-violet-500/20 border-t-violet-400 rounded-full animate-spin" />
+                        <span className="text-[10px] font-mono text-zinc-400 uppercase tracking-widest animate-pulse">Amortiguando lazo cerrado...</span>
+                      </div>
+                    )}
                     <div className="absolute top-2 left-2 font-mono text-[9px] text-zinc-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
                       RECONSTRUCTED_PSF (Closed-Loop·GPU)
                     </div>

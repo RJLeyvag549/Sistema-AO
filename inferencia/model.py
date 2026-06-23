@@ -2,12 +2,13 @@ import torch
 import torch.nn as nn
 
 class BaselineCNN(nn.Module):
-    def __init__(self):
+    def __init__(self, in_channels=1):
         super(BaselineCNN, self).__init__()
         
-        # Convolución 1: Entrada 1 canal (PSF gris), 32 filtros 5x5, padding=2
-        # Entrada: (B, 1, 96, 96) -> Salida: (B, 32, 96, 96)
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=5, stride=1, padding=2)
+        # Convolución 1: Entrada in_channels (PSF gris), 32 filtros 5x5, padding=2
+        # Entrada: (B, in_channels, 96, 96) -> Salida: (B, 32, 96, 96)
+        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=32, kernel_size=5, stride=1, padding=2)
+
         self.relu1 = nn.LeakyReLU(negative_slope=0.1)
         # Reducción: MaxPool 2x2 -> (B, 32, 48, 48)
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
