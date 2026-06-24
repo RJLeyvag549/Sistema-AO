@@ -4,7 +4,9 @@ import threading
 import time
 import requests
 import os
+import logging
 
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
 app = Flask(__name__)
 CORS(app)
 
@@ -94,4 +96,4 @@ if __name__ == '__main__':
     threading.Thread(target=logic_loop, daemon=True).start()
     
     # Iniciar servidor API
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)

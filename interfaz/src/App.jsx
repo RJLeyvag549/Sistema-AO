@@ -399,7 +399,7 @@ function App() {
             }
           })
           .catch(err => console.error("Error al actualizar Zernikes:", err));
-      }, 200);
+      }, 1000);
     } else {
       // Detener los cuatro bucles GPU y volver a modo manual
       if (loopIdRef.current) cancelAnimationFrame(loopIdRef.current);

@@ -1,15 +1,25 @@
 from flask import Flask, jsonify, request
 import numpy as np
 import torch
+import torch._dynamo
+import glob
 import os
 import time
+import logging
 
 from model import BaselineCNN
 from model_resnet import ResNet10
 from dataset import denormalize_predictions
 # from jit_resnet import load_resnet10_for_inference
 
+logging.basicConfig(
+    level=logging.WARNING,
+    format='[INFERENCIA] %(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
 SHARED_DIR = "/app/shared"
 MODEL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -17,9 +27,21 @@ PSF_PATH = os.path.join(SHARED_DIR, "psf.npy")
 
 # Configurar dispositivo
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"[INFERENCIA] Usando dispositivo: {device}")
+logger.warning(f"[DEVICE] Usando: {device.type.upper()}")
 if device.type == "cuda":
     torch.backends.cudnn.benchmark = True
+    # TF32: usa Tensor Cores de Ampere+ para matmul float32 (~2x más rápido, sin cambios en código)
+    torch.set_float32_matmul_precision('high')
+    gpu_name = torch.cuda.get_device_name(0)
+    vram_total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+    logger.warning(f"[GPU] {gpu_name} | VRAM total: {vram_total:.1f} GB")
+else:
+    logger.warning("[ADVERTENCIA] No se detectó CUDA. Inferencia en CPU — rendimiento limitado.")
+
+
+if device.type == "cuda":
+    _fix_wsl2_libcuda = None  # Fix gestionado por entrypoint.sh (antes de que Python arranque)
+
 
 # Diccionario para almacenar los modelos cargados
 models = {}
@@ -29,6 +51,41 @@ models_loaded = {
 }
 resnet_jit_meta = {}
 resnet_uses_jit = False
+
+
+def _compile_model(model, name: str):
+    """
+    Intenta torch.compile() con reduce-overhead.
+    El test de compilación real se hace aquí con un forward pass dummy:
+    inductor compila de forma lazy en el primer forward, no en la llamada a torch.compile().
+    Si falla (ej: libcuda.so no encontrado), revierte a modo eager limpio.
+    """
+    try:
+        compiled = torch.compile(model, mode="reduce-overhead")
+        # IMPORTANTE: el error de inductor ocurre aquí (compilación lazy), no en torch.compile()
+        dummy = torch.zeros(1, 2, 96, 96, device=device)
+        with torch.no_grad():
+            compiled(dummy)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        logger.warning(f"[COMPILE] {name}: torch.compile activo (reduce-overhead + TF32)")
+        return compiled
+    except Exception as e:
+        logger.warning(f"[COMPILE] torch.compile falló para {name} ({type(e).__name__}). Revirtiendo a eager.")
+        logger.warning(f"[COMPILE] Causa: {str(e)[:120]}")
+        torch._dynamo.reset()  # Limpia el estado de dynamo para evitar recompilaciones fallidas
+        return model  # Retorna el modelo original sin compilar
+
+
+def _warmup_model(model, name: str):
+    """Warm-up adicional: el primer forward ya se hizo en _compile_model, estos son extra."""
+    dummy = torch.zeros(1, 2, 96, 96, device=device)
+    with torch.no_grad():
+        for _ in range(2):
+            model(dummy)
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    logger.warning(f"[WARMUP] {name} listo")
 
 
 def _load_resnet10_eager(resnet_path: str):
@@ -43,9 +100,11 @@ def _load_resnet10_eager(resnet_path: str):
     else:
         models_loaded["resnet10"] = False
     model.eval()
+    model = _compile_model(model, "ResNet10")
+    _warmup_model(model, "ResNet10")
     models["resnet10"] = model
     resnet_uses_jit = False
-    resnet_jit_meta = {"backend": "eager", "weights_path": resnet_path}
+    resnet_jit_meta = {"backend": "eager+compiled", "weights_path": resnet_path}
 
 
 def _load_resnet10():
@@ -64,12 +123,14 @@ if os.path.exists(pd_path):
         models["phase_diversity"].load_state_dict(torch.load(pd_path, map_location=device))
         models["phase_diversity"].to(device)
         models["phase_diversity"].eval()
+        models["phase_diversity"] = _compile_model(models["phase_diversity"], "BaselineCNN")
+        _warmup_model(models["phase_diversity"], "BaselineCNN")
         models_loaded["phase_diversity"] = True
-        print(f"[INFERENCIA] Modelo Phase Diversity cargado con éxito desde {pd_path}")
+        logger.warning(f"[LOAD] Modelo Phase Diversity cargado desde {pd_path}")
     except Exception as e:
-        print(f"[INFERENCIA] Error al cargar modelo Phase Diversity: {e}")
+        logger.error(f"Error al cargar modelo Phase Diversity: {e}")
 else:
-    print(f"[INFERENCIA] Modelo Phase Diversity no cargado (esperando entrenamiento).")
+    logger.warning("Modelo Phase Diversity no cargado (esperando entrenamiento).")
 
 
 @app.route('/status')
@@ -109,9 +170,9 @@ def predict():
                     models[model_name].to(device)
                     models[model_name].eval()
                     models_loaded[model_name] = True
-                print(f"[INFERENCIA] Modelo {model_name} recargado con éxito desde {full_path}")
+                logger.debug(f"Modelo {model_name} recargado con éxito desde {full_path}")
             except Exception as e:
-                print(f"[INFERENCIA] Error al recargar modelo {model_name}: {e}")
+                logger.error(f"Error al recargar modelo {model_name}: {e}")
                 
     active_model = models[model_name]
     
@@ -127,7 +188,7 @@ def predict():
         # Ambos modelos esperan 2 canales: shape (2, 96, 96) -> preprocesar a (1, 2, 96, 96)
         if psf_data.shape != (2, 96, 96):
             return jsonify({"error": f"Modelo requiere PSF de 2 canales. Recibido: {psf_data.shape}"}), 400
-        psf_tensor = torch.from_numpy(psf_data).unsqueeze(0).to(device)
+        psf_tensor = torch.from_numpy(psf_data).unsqueeze(0).to(device, non_blocking=True)
             
         # Ejecutar inferencia
         with torch.no_grad():
@@ -144,9 +205,9 @@ def predict():
         })
         
     except Exception as e:
-        print(f"[INFERENCIA] Error durante inferencia: {e}")
+        logger.error(f"Error durante inferencia: {e}")
         return jsonify({"error": f"Fallo en inferencia: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    print("--- INFERENCIA CNN MULTI-MODELO DOBLE CANAL: SERVIDOR ACTIVO ---")
+    logger.warning("--- INFERENCIA CNN MULTI-MODELO DOBLE CANAL: SERVIDOR ACTIVO ---")
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)

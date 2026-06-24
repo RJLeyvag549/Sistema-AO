@@ -6,6 +6,7 @@ import io
 import threading
 import time
 import requests
+import logging
 from PIL import Image, ImageDraw, ImageFont
 from scipy.ndimage import zoom
 
@@ -17,6 +18,7 @@ from prysm.propagation import focus
 # CONFIGURACION Y CONSTANTES
 # ===============================================================
 
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
 app = Flask(__name__)
 CORS(app)
 
@@ -337,8 +339,6 @@ def save_psf_npy():
     perf_metrics["save_npy_count"] += 1
     perf_metrics["save_npy_time"] += elapsed
     if perf_metrics["save_npy_count"] % 100 == 0:
-        avg_ms = (perf_metrics["save_npy_time"] / 100) * 1000
-        print(f"[PERF] Generación óptica y predicción proactiva (100 iteraciones): Promedio {avg_ms:.3f} ms", flush=True)
         perf_metrics["save_npy_time"] = 0.0
 
 
@@ -378,8 +378,6 @@ def update_stochastic_turbulence_loop():
                     perf_metrics["stochastic_loop_count"] += 1
                     perf_metrics["stochastic_loop_time"] += elapsed
                     if perf_metrics["stochastic_loop_count"] % 100 == 0:
-                        avg_ms = (perf_metrics["stochastic_loop_time"] / 100) * 1000
-                        print(f"[PERF] Bucle de Turbulencia Estocastico sin sleep (100 iteraciones): Promedio {avg_ms:.3f} ms", flush=True)
                         perf_metrics["stochastic_loop_time"] = 0.0
                         
         except Exception as e:
@@ -480,7 +478,6 @@ def get_image_raw():
     response.headers['Expires']       = '0'
 
     elapsed = time.perf_counter() - t_start
-    print(f"[PERF] Raw bytes ({len(gray_bytes)} B): {elapsed*1000:.2f} ms", flush=True) if elapsed > 0.005 else None
 
     return response
 

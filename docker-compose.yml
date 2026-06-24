@@ -20,17 +20,31 @@ services:
     volumes:
       - ./simulador:/app
       - shared_data:/app/shared
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - ao_pipeline_net
 
   inferencia:
     build: ./inferencia
     container_name: ao_inferencia
+    runtime: nvidia                          # Fuerza el runtime NVIDIA explícitamente
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all           # Expone todas las GPUs al contenedor
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility  # Habilita compute + nvidia-smi
     ports:
       - "${INFERENCIA_PORT:-5001}:5000"
     volumes:
       - ./inferencia:/app
       - shared_data:/app/shared
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     deploy:
       resources:
         reservations:
@@ -52,6 +66,11 @@ services:
       - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-telemetria_bucket}
     volumes:
       - ./controlador:/app
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - ao_pipeline_net
     depends_on:

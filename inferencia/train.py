@@ -43,6 +43,11 @@ def main():
     print(f"Dispositivo: {device}")
     if device.type == "cuda":
         print(f"  -> Tarjeta gráfica: {torch.cuda.get_device_name(0)}")
+        # TF32: habilita Tensor Cores de Ampere para matmul float32 (~2x más rápido)
+        torch.set_float32_matmul_precision('high')
+        # cuDNN benchmark: autoselecciona el algoritmo de conv óptimo para batch size fijo
+        torch.backends.cudnn.benchmark = True
+        print(f"  -> TF32 y cuDNN benchmark habilitados")
     print(f"Muestras de entrenamiento: {samples}")
     print(f"Épocas: {epochs}\n")
 
@@ -98,7 +103,8 @@ def main():
         
         # Bucle de entrenamiento por lotes
         for psfs, targets in train_loader:
-            psfs, targets = psfs.to(device), targets.to(device)
+            # non_blocking=True: superpone transferencia CPU->GPU con cómputo previo
+            psfs, targets = psfs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
             
             optimizer.zero_grad()
             outputs = model(psfs)
@@ -116,7 +122,7 @@ def main():
         running_val_loss = 0.0
         with torch.no_grad():
             for psfs, targets in val_loader:
-                psfs, targets = psfs.to(device), targets.to(device)
+                psfs, targets = psfs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
                 outputs = model(psfs)
                 loss = weighted_mse_loss(outputs, targets)
                 running_val_loss += loss.item() * psfs.size(0)
