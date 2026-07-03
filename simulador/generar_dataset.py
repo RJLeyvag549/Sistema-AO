@@ -107,6 +107,6 @@ if __name__ == "__main__":
     print("=== GENERACIÓN DEL DATASET DE ENTRENAMIENTO ===", flush=True)
     # 10,000 para entrenamiento
     build_dataset(10000, TRAIN_DIR)
-    # 2,000 para validación
-    build_dataset(2000, VAL_DIR)
+    # 10,000 para validación
+    build_dataset(10000, VAL_DIR)
     print("=== DATASET GENERADO CON ÉXITO ===", flush=True)

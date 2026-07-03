@@ -8,7 +8,7 @@ import time
 import logging
 
 from model import BaselineCNN
-from model_resnet import ResNet10
+from model_resnet import ResNet10, ResNet18
 from dataset import denormalize_predictions
 # from jit_resnet import load_resnet10_for_inference
 
@@ -47,7 +47,8 @@ if device.type == "cuda":
 models = {}
 models_loaded = {
     "phase_diversity": False,
-    "resnet10": False
+    "resnet10": False,
+    "resnet18": False,
 }
 resnet_jit_meta = {}
 resnet_uses_jit = False
@@ -93,10 +94,14 @@ def _load_resnet10_eager(resnet_path: str):
     global resnet_jit_meta, resnet_uses_jit
     model = ResNet10(in_channels=2).to(device)
     if os.path.exists(resnet_path):
-        model.load_state_dict(
-            torch.load(resnet_path, map_location=device, weights_only=True)
-        )
-        models_loaded["resnet10"] = True
+        try:
+            model.load_state_dict(
+                torch.load(resnet_path, map_location=device, weights_only=True)
+            )
+            models_loaded["resnet10"] = True
+        except Exception as e:
+            models_loaded["resnet10"] = False
+            logger.warning(f"[LOAD] Error al cargar pesos de ResNet-10 ({e}). Iniciando modelo vacio para permitir entrenamiento.")
     else:
         models_loaded["resnet10"] = False
     model.eval()
@@ -108,12 +113,48 @@ def _load_resnet10_eager(resnet_path: str):
 
 
 def _load_resnet10():
-    resnet_path = os.path.join(MODEL_DIR, "resnet10_cnn.pth")
+    # Buscar primero en SHARED_DIR (donde train.py guarda), luego en MODEL_DIR
+    shared_path = os.path.join(SHARED_DIR, "resnet10_cnn.pth")
+    local_path  = os.path.join(MODEL_DIR,  "resnet10_cnn.pth")
+    resnet_path = shared_path if os.path.exists(shared_path) else local_path
     _load_resnet10_eager(resnet_path)
+
+
+def _load_resnet18_eager(resnet_path: str):
+    """Carga ResNet-18 en modo eager con torch.compile si CUDA disponible."""
+    model = ResNet18(in_channels=2).to(device)
+    if os.path.exists(resnet_path):
+        try:
+            model.load_state_dict(
+                torch.load(resnet_path, map_location=device, weights_only=True)
+            )
+            models_loaded["resnet18"] = True
+            logger.warning(f"[LOAD] ResNet-18 cargado desde {resnet_path}")
+        except Exception as e:
+            models_loaded["resnet18"] = False
+            logger.warning(f"[LOAD] Error al cargar pesos de ResNet-18 ({e}). Iniciando modelo vacio para permitir entrenamiento.")
+    else:
+        models_loaded["resnet18"] = False
+        logger.warning(f"[LOAD] ResNet-18 no encontrado en {resnet_path} — modelo no cargado.")
+    model.eval()
+    model = _compile_model(model, "ResNet18")
+    _warmup_model(model, "ResNet18")
+    models["resnet18"] = model
+
+
+def _load_resnet18():
+    # Buscar primero en SHARED_DIR (donde train.py guarda), luego en MODEL_DIR
+    shared_path = os.path.join(SHARED_DIR, "resnet18_cnn.pth")
+    local_path  = os.path.join(MODEL_DIR,  "resnet18_cnn.pth")
+    resnet_path = shared_path if os.path.exists(shared_path) else local_path
+    _load_resnet18_eager(resnet_path)
 
 
 # 0. Cargar Modelo ResNet-10 (2 Canales) directamente desde el .pth
 _load_resnet10()
+
+# 0b. Cargar Modelo ResNet-18 si existe el .pth entrenado
+_load_resnet18()
 
 # 1. Cargar Modelo Phase Diversity (2 Canales)
 models["phase_diversity"] = BaselineCNN(in_channels=2)
@@ -137,7 +178,7 @@ else:
 def status():
     return jsonify({
         "status": "online", 
-        "service": "Inferencia CNN (PyTorch ResNet-10)",
+        "service": "Inferencia CNN (PyTorch ResNet-10 / ResNet-18)",
         "shared_volume": os.path.exists(SHARED_DIR),
         "models_loaded": models_loaded,
         "device": str(device),
@@ -154,15 +195,22 @@ def predict():
         
     # Verificar si el modelo solicitado está cargado. Si no, intentar recargarlo.
     if not models_loaded[model_name]:
+        def _resolve_pth(filename):
+            shared = os.path.join(SHARED_DIR, filename)
+            return shared if os.path.exists(shared) else os.path.join(MODEL_DIR, filename)
+
         path_map = {
             "phase_diversity": os.path.join(MODEL_DIR, "phase_diversity_cnn.pth"),
-            "resnet10": os.path.join(MODEL_DIR, "resnet10_cnn.pth")
+            "resnet10": _resolve_pth("resnet10_cnn.pth"),
+            "resnet18": _resolve_pth("resnet18_cnn.pth"),
         }
         full_path = path_map[model_name]
         if os.path.exists(full_path):
             try:
                 if model_name == "resnet10":
                     _load_resnet10()
+                elif model_name == "resnet18":
+                    _load_resnet18()
                 else:
                     models[model_name].load_state_dict(
                         torch.load(full_path, map_location=device, weights_only=True)

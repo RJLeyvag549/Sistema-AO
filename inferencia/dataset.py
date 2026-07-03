@@ -88,7 +88,14 @@ class PSFGeneratorDataset(Dataset):
 
     def __getitem__(self, idx):
         # 1. Variar D/r0 aleatoriamente
-        d_r0 = np.random.uniform(0.1, 6.0)
+        if self.model_type == "resnet18":
+            # Usar distribución Beta sesgada a la derecha (valores altos de turbulencia)
+            # beta(2.0, 1.5) genera valores en [0, 1] acumulados hacia 1.0
+            # Mapeamos [0, 1] al rango [0.1, 6.0]
+            d_r0 = 0.1 + (6.0 - 0.1) * np.random.beta(a=2.0, b=1.5)
+        else:
+            d_r0 = np.random.uniform(0.1, 6.0)
+            
         factor_kolmogorov = d_r0 ** (5.0 / 3.0)
         
         # 2. Generar coeficientes (Z1=0, Z2..Z11 estocásticos según Kolmogorov)
@@ -130,6 +137,24 @@ class PSFGeneratorDataset(Dataset):
         psf1_norm = psf1_crop / max1 if max1 > 0 else psf1_crop
         psf2_norm = psf2_crop / max2 if max2 > 0 else psf2_crop
         
+        # Aumento de datos (Data Augmentation) al vuelo para modelos profundos (resnet18)
+        # Esto reduce el sobreajuste al emular ruido de sensor y fluctuaciones físicas
+        if self.model_type == "resnet18":
+            # 1. Ruido Gaussiano aditivo leve (sensibilidad del sensor de imagen)
+            noise_level = np.random.uniform(0.002, 0.015)
+            psf1_norm = psf1_norm + np.random.normal(0, noise_level, psf1_norm.shape)
+            psf2_norm = psf2_norm + np.random.normal(0, noise_level, psf2_norm.shape)
+            
+            # Asegurar límites [0, 1] tras el ruido
+            psf1_norm = np.clip(psf1_norm, 0.0, 1.0)
+            psf2_norm = np.clip(psf2_norm, 0.0, 1.0)
+
+            # 2. Pequeñas variaciones de escala/intensidad locales aleatorias
+            psf1_norm *= np.random.uniform(0.98, 1.02)
+            psf2_norm *= np.random.uniform(0.98, 1.02)
+            psf1_norm = np.clip(psf1_norm, 0.0, 1.0)
+            psf2_norm = np.clip(psf2_norm, 0.0, 1.0)
+
         psf_tensor = torch.stack([
             torch.from_numpy(psf1_norm.astype(np.float32)),
             torch.from_numpy(psf2_norm.astype(np.float32))

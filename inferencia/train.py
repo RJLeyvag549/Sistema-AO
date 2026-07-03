@@ -9,17 +9,17 @@ import numpy as np
 import time
 
 from model import BaselineCNN
-from model_resnet import ResNet10
+from model_resnet import ResNet10, ResNet18
 from dataset import PSFGeneratorDataset
-from jit_resnet import export_resnet10_jit
+from jit_resnet import export_resnet10_jit, export_resnet18_jit
 
 # Configuración de rutas
 SHARED_DIR = "/app/shared"
 
 def main():
     parser = argparse.ArgumentParser(description="Entrenamiento al vuelo de la CNN de Óptica Adaptativa")
-    parser.add_argument("--model", type=str, default="phase_diversity", choices=["phase_diversity", "resnet10"],
-                        help="Tipo de modelo a entrenar: phase_diversity, resnet10")
+    parser.add_argument("--model", type=str, default="phase_diversity", choices=["phase_diversity", "resnet10", "resnet18"],
+                        help="Tipo de modelo a entrenar: phase_diversity, resnet10, resnet18")
     parser.add_argument("--samples", type=int, default=100000,
                         help="Número de muestras equivalentes para entrenar")
     parser.add_argument("--epochs", type=int, default=10,
@@ -72,19 +72,34 @@ def main():
         pin_memory=(device.type == "cuda")
     )
 
-    # 3. Inicializar Modelo (siempre 2 canales para phase_diversity o resnet10)
+    # 3. Inicializar Modelo (siempre 2 canales para phase_diversity, resnet10 o resnet18)
     in_channels = 2
     if model_type == "resnet10":
         model = ResNet10(in_channels=in_channels).to(device)
+        optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    elif model_type == "resnet18":
+        model = ResNet18(in_channels=in_channels).to(device)
+        # ResNet-18 profunda: requiere menor tasa de aprendizaje y regularización L2 (weight decay)
+        optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
     else:
         model = BaselineCNN(in_channels=in_channels).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
+        optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+        
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
 
     # 4. Definir Pérdida Ponderada (Weighted MSE Loss)
     loss_weights = torch.ones(11, dtype=torch.float32).to(device)
+    loss_weights[0] = 0.0   # Z1 (Piston) - Ignorado
     loss_weights[1] = 10.0  # Z2 (Tip)
     loss_weights[2] = 10.0  # Z3 (Tilt)
+    loss_weights[3] = 5.0   # Z4 (Defocus)
+    loss_weights[4] = 5.0   # Z5 (Astigmatism 45°)
+    loss_weights[5] = 5.0   # Z6 (Astigmatism 0°)
+    loss_weights[6] = 5.0   # Z7 (Coma X)
+    loss_weights[7] = 5.0   # Z8 (Coma Y)
+    loss_weights[8] = 2.5   # Z9 (Trefoil X)
+    loss_weights[9] = 2.5   # Z10 (Trefoil Y)
+    loss_weights[10] = 2.5  # Z11 (Spherical)
 
     def weighted_mse_loss(pred, target):
         squared_errors = (pred - target) ** 2
@@ -144,9 +159,12 @@ def main():
     print(f"=== Entrenamiento {model_type.upper()} completado en {total_time/60:.2f} minutos ===")
     print(f"Mejor Pérdida de Validación: {best_val_loss:.6f}")
 
-    if model_type == "resnet10" and os.path.exists(MODEL_SAVE_PATH):
+    if model_type in ("resnet10", "resnet18") and os.path.exists(MODEL_SAVE_PATH):
         try:
-            jit_path = export_resnet10_jit(MODEL_SAVE_PATH, device)
+            if model_type == "resnet10":
+                jit_path = export_resnet10_jit(MODEL_SAVE_PATH, device)
+            else:
+                jit_path = export_resnet18_jit(MODEL_SAVE_PATH, device)
             print(f"TorchScript exportado: {jit_path}", flush=True)
         except Exception as e:
             print(f"Advertencia: no se pudo exportar TorchScript: {e}", flush=True)
