@@ -15,6 +15,19 @@ env/
 shared/*.npy
 influxdb_data/
 
+# Modelos entrenados en el volumen compartido (efímeros, no versionar)
+# Los modelos versionados en inferencia/models/ SÍ se suben al repo.
+inferencia/shared/
+shared/*.pth
+shared/*.pt
+shared/*.png
+
+# Dataset generado al vuelo (nunca versionar)
+inferencia/shared/dataset/
+
+# CSVs de resultados de captura (pueden pesar decenas de MB)
+scripts/resultados/*.csv
+
 # IDEs
 .vscode/
 .idea/

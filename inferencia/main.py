@@ -23,6 +23,7 @@ logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
 SHARED_DIR = "/app/shared"
 MODEL_DIR = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR = os.path.join(MODEL_DIR, "models")  # inferencia/models/ — pesos versionados en el repo
 PSF_PATH = os.path.join(SHARED_DIR, "psf.npy")
 
 # Configurar dispositivo
@@ -89,6 +90,22 @@ def _warmup_model(model, name: str):
     logger.warning(f"[WARMUP] {name} listo")
 
 
+def _resolve_pth(filename):
+    """
+    Resuelve la ruta de los pesos en orden de prioridad:
+      1. /app/shared/  — salida de train.py (re-entrenamiento en vivo tiene precedencia)
+      2. /app/models/  — pesos versionados en el repositorio (arranque en frío sin volumen)
+      3. /app/         — compatibilidad con instalaciones antiguas
+    """
+    shared = os.path.join(SHARED_DIR, filename)
+    if os.path.exists(shared):
+        return shared
+    versioned = os.path.join(MODELS_DIR, filename)
+    if os.path.exists(versioned):
+        return versioned
+    return os.path.join(MODEL_DIR, filename)
+
+
 def _load_resnet10_eager(resnet_path: str):
     """Fallback: modelo eager si TorchScript falla."""
     global resnet_jit_meta, resnet_uses_jit
@@ -114,9 +131,7 @@ def _load_resnet10_eager(resnet_path: str):
 
 def _load_resnet10():
     # Buscar primero en SHARED_DIR (donde train.py guarda), luego en MODEL_DIR
-    shared_path = os.path.join(SHARED_DIR, "resnet10_cnn.pth")
-    local_path  = os.path.join(MODEL_DIR,  "resnet10_cnn.pth")
-    resnet_path = shared_path if os.path.exists(shared_path) else local_path
+    resnet_path = _resolve_pth("resnet10_cnn.pth")
     _load_resnet10_eager(resnet_path)
 
 
@@ -144,9 +159,7 @@ def _load_resnet18_eager(resnet_path: str):
 
 def _load_resnet18():
     # Buscar primero en SHARED_DIR (donde train.py guarda), luego en MODEL_DIR
-    shared_path = os.path.join(SHARED_DIR, "resnet18_cnn.pth")
-    local_path  = os.path.join(MODEL_DIR,  "resnet18_cnn.pth")
-    resnet_path = shared_path if os.path.exists(shared_path) else local_path
+    resnet_path = _resolve_pth("resnet18_cnn.pth")
     _load_resnet18_eager(resnet_path)
 
 
@@ -158,7 +171,7 @@ _load_resnet18()
 
 # 1. Cargar Modelo Phase Diversity (2 Canales)
 models["phase_diversity"] = BaselineCNN(in_channels=2)
-pd_path = os.path.join(MODEL_DIR, "phase_diversity_cnn.pth")
+pd_path = _resolve_pth("phase_diversity_cnn.pth")
 if os.path.exists(pd_path):
     try:
         models["phase_diversity"].load_state_dict(torch.load(pd_path, map_location=device))
@@ -195,12 +208,8 @@ def predict():
         
     # Verificar si el modelo solicitado está cargado. Si no, intentar recargarlo.
     if not models_loaded[model_name]:
-        def _resolve_pth(filename):
-            shared = os.path.join(SHARED_DIR, filename)
-            return shared if os.path.exists(shared) else os.path.join(MODEL_DIR, filename)
-
         path_map = {
-            "phase_diversity": os.path.join(MODEL_DIR, "phase_diversity_cnn.pth"),
+            "phase_diversity": _resolve_pth("phase_diversity_cnn.pth"),
             "resnet10": _resolve_pth("resnet10_cnn.pth"),
             "resnet18": _resolve_pth("resnet18_cnn.pth"),
         }

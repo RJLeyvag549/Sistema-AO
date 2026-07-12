@@ -97,7 +97,7 @@ class ResNet18(nn.Module):
 
         # Pooling a 2x2 (4 cuadrantes) para conservar localización espacial básica
         self.avgpool = nn.AdaptiveAvgPool2d((2, 2))
-        self.dropout = nn.Dropout(p=0.1)
+        self.dropout = nn.Dropout(p=0.2)
         self.fc = nn.Linear(512 * 2 * 2 * BasicBlock.expansion, num_outputs)
 
     def _make_layer(self, block, planes, num_blocks, stride, use_leaky=False):

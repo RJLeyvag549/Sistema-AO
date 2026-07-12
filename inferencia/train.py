@@ -22,12 +22,15 @@ def main():
                         help="Tipo de modelo a entrenar: phase_diversity, resnet10, resnet18")
     parser.add_argument("--samples", type=int, default=100000,
                         help="Número de muestras equivalentes para entrenar")
+    parser.add_argument("--val-samples", type=int, default=10000,
+                        help="Número de muestras para validación")
     parser.add_argument("--epochs", type=int, default=10,
                         help="Número de épocas de entrenamiento")
     args = parser.parse_args()
 
     model_type = args.model
     samples = args.samples
+    val_samples = args.val_samples
     epochs = args.epochs
 
     MODEL_SAVE_PATH = os.path.join(SHARED_DIR, f"{model_type}_cnn.pth")
@@ -49,26 +52,26 @@ def main():
         torch.backends.cudnn.benchmark = True
         print(f"  -> TF32 y cuDNN benchmark habilitados")
     print(f"Muestras de entrenamiento: {samples}")
+    print(f"Muestras de validación: {val_samples}")
     print(f"Épocas: {epochs}\n")
 
     # 2. Cargar Datasets al Vuelo
     print("Inicializando generador de datos al vuelo...", flush=True)
     train_dataset = PSFGeneratorDataset(num_samples=samples, model_type=model_type)
-    # 2,000 muestras fijas de validación para mantener rapidez
-    val_dataset = PSFGeneratorDataset(num_samples=2000, model_type=model_type)
+    val_dataset = PSFGeneratorDataset(num_samples=val_samples, model_type=model_type)
 
     train_loader = DataLoader(
         train_dataset, 
         batch_size=BATCH_SIZE, 
         shuffle=True, 
-        num_workers=2, 
+        num_workers=0,  # Cambiado a 0 para evitar deadlocks con muchos samples
         pin_memory=(device.type == "cuda")
     )
     val_loader = DataLoader(
         val_dataset, 
         batch_size=BATCH_SIZE, 
         shuffle=False, 
-        num_workers=2, 
+        num_workers=0, 
         pin_memory=(device.type == "cuda")
     )
 
@@ -79,15 +82,17 @@ def main():
         optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     elif model_type == "resnet18":
         model = ResNet18(in_channels=in_channels).to(device)
-        # ResNet-18 profunda: requiere menor tasa de aprendizaje y regularización L2 (weight decay)
-        optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
+        # Mismo LR que Modelo A (1e-3) + weight decay para regularización L2
+        optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     else:
         model = BaselineCNN(in_channels=in_channels).to(device)
         optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-        
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
 
-    # 4. Definir Pérdida Ponderada (Weighted MSE Loss)
+    # Cosine Annealing: decae el LR suavemente desde LR hasta 0 a lo largo de todas las épocas.
+    # Mucho más estable que ReduceLROnPlateau con datos estocásticos al vuelo.
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+
+    # 4. Definir Pérdida Ponderada (Weighted MSE Loss original)
     loss_weights = torch.ones(11, dtype=torch.float32).to(device)
     loss_weights[0] = 0.0   # Z1 (Piston) - Ignorado
     loss_weights[1] = 10.0  # Z2 (Tip)

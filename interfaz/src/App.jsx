@@ -3,7 +3,7 @@ import axios from 'axios';
 import { Settings, Activity, Info } from 'lucide-react';
 import logoUbb from './assets/v-escudo-color-gradiente.png';
 
-const API_BASE = 'http://localhost:5000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
 
 const ZERNIKE_MODES = [
   { id: 'Z1', name: 'Z₁ — Pistón (Piston)', min: -Math.PI, max: Math.PI, step: 0.01 },
@@ -726,50 +726,74 @@ function App() {
   return (
     <div className="min-h-screen p-6 flex flex-col gap-6 font-sans">
 
-      {/* ── NAVBAR PREMIUM ── */}
-      <nav className="flex justify-between items-center lab-panel px-6 py-4 border border-zinc-800/80 bg-zinc-950/40 rounded-xl">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-blue-500/10 border border-blue-500/30 flex items-center justify-center">
-            <Activity className="text-blue-500" size={16} />
+      {/* ── NAVBAR PREMIUM (Panel científico) ── */}
+      <nav className="rounded-xl border border-[#223B53] bg-[#0F2433] px-6 py-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-md border border-[#2A3E53] bg-[#0F2433]">
+              <Activity className="text-[#4EA3FF]" size={18} />
+            </div>
+            <div className="space-y-0">
+              <div className="flex items-center gap-2">
+                <h1 className="text-sm font-semibold tracking-[0.02em] text-[#E8EEF7]">
+                  Sistema de Control de Óptica Adaptativa
+                </h1>
+                <span className="rounded border border-[#223B53] bg-[#0F2433] px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-[#4EA3FF]">
+                  v2.0
+                </span>
+              </div>
+              <p className="text-[10px] text-[#8FA0B3]">HOLOEYE PLUTO 2.1 · UBB Chile</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-sm font-semibold tracking-tight text-white flex items-center gap-2">
-              Sistema de Control de Óptica Adaptativa <span className="text-[10px] text-zinc-500 font-mono">v2.0</span>
-            </h1>
-            <p className="text-[10px] text-zinc-400 font-mono">
-              HOLOEYE PLUTO 2.1 · UBB Chile
-            </p>
+
+          {/* Centro: selector grande integrado */}
+          <div className="flex items-center gap-3">
+            <div className="rounded-lg border border-[#223B53] bg-[#101B2E] p-1.5 flex items-center">
+              <button
+                onClick={() => setActiveTab('simulation')}
+                className={`px-5 py-2 rounded-lg text-sm font-semibold transition-colors duration-150 ${
+                  activeTab === 'simulation' ? 'bg-[#0F2433] text-[#E8EEF7] border border-[#2A3E53]' : 'text-[#8FA0B3] hover:text-[#E8EEF7]'
+                }`}
+              >
+                Modo Simulación
+              </button>
+              <div className="w-1" />
+              {/* MÓDULO CÁMARA REAL — visible pero deshabilitado hasta completar desarrollo */}
+              <div className="relative group">
+                <button
+                  disabled
+                  className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold
+                             text-[#8FA0B3]/50 cursor-not-allowed select-none"
+                  title="Módulo de Cámara Real — En desarrollo"
+                >
+                  <div className="h-2 w-2 rounded-full bg-[#6B7280]/40" />
+                  Cámara Real
+                  <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider
+                                   bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                    WIP
+                  </span>
+                </button>
+                {/* Tooltip al hacer hover */}
+                <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-2 z-50
+                                w-44 rounded-lg border border-[#223B53] bg-[#0A1628] px-3 py-2 shadow-xl
+                                opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                  <p className="text-[10px] text-amber-400 font-semibold mb-0.5">En desarrollo</p>
+                  <p className="text-[10px] text-[#8FA0B3] leading-snug">
+                    El módulo de cámara infrarroja estará disponible próximamente.
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
 
-        {/* Tabs de Navegación */}
-        <div className="flex bg-zinc-900/90 p-1 rounded-lg border border-zinc-800/50">
-          <button
-            onClick={() => setActiveTab('simulation')}
-            className={`px-4 py-1.5 rounded-md text-xs font-medium transition-all duration-200 ${
-              activeTab === 'simulation'
-                ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/35'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            Modo Simulación
-          </button>
-          <button
-            onClick={() => setActiveTab('camera')}
-            className={`px-4 py-1.5 rounded-md text-xs font-medium transition-all duration-200 flex items-center gap-1.5 ${
-              activeTab === 'camera'
-                ? 'bg-blue-600/20 text-blue-400 shadow-sm border border-blue-500/30'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <div className={`w-1.5 h-1.5 rounded-full ${cameraActive ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-500'}`} />
-            Cámara Real (Chameleon)
-          </button>
-        </div>
-
-        <div className="flex items-center gap-4">
-          <StatusBadge online={activeTab === 'camera' ? cameraActive : simOnline} label={activeTab === 'camera' ? "CÁMARA REAL" : "SIMULADOR FÍSICO PRYSM"} />
-          <img src={logoUbb} alt="UBB" className="h-9 opacity-80" />
+          {/* Derecha: estado compacto + logo (sin texto largo del simulador) */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 rounded-md border border-[#223B53] bg-[#101B2E] px-3 py-2">
+              <StatusBadge online={simOnline} label={''} />
+              <div className="h-5 w-px bg-[#223B53]" />
+              <img src={logoUbb} alt="UBB" className="h-8 opacity-80" />
+            </div>
+          </div>
         </div>
       </nav>
 
@@ -779,45 +803,62 @@ function App() {
         {/* Barra lateral de controles */}
         <aside className="w-full md:w-80 flex flex-col gap-4 shrink-0">
           {activeTab === 'simulation' ? (
-            <div className="lab-panel p-5 flex flex-col">
+            <div className="rounded-xl border border-[#223B53] bg-[#0F2433] p-5 flex flex-col">
               <h2 className="flex items-center gap-2 text-sm font-medium text-white mb-4">
                 <Settings size={16} className="text-zinc-400" /> Configuración General
               </h2>
 
-              {/* Selectbox para el Método de Generación */}
+              {/* Método de Generación (botones) */}
               <div className="flex flex-col gap-2 mb-4">
-                <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                <label className="text-xs font-semibold text-[#8FA0B3] uppercase tracking-wider">
                   Método de Generación
                 </label>
-                <select
-                  value={method}
-                  onChange={(e) => setMethod(e.target.value)}
-                  className="w-full bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs rounded p-2.5 outline-none focus:border-zinc-700 font-sans"
-                >
-                  <option value="1">1. Modos Individuales Deterministas (Zernike)</option>
-                  <option value="2">2. Turbulencia Estocástica (Kolmogorov)</option>
-                </select>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setMethod('1')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${method === '1' ? 'bg-[#0F2433] text-[#4EA3FF] border border-[#223B53]' : 'text-[#8FA0B3] hover:text-[#E8EEF7] bg-[#101B2E] border border-[#223B53]'}`}
+                  >
+                    1 · Zernike (Determinista)
+                  </button>
+                  <button
+                    onClick={() => setMethod('2')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${method === '2' ? 'bg-[#0F2433] text-[#4EA3FF] border border-[#223B53]' : 'text-[#8FA0B3] hover:text-[#E8EEF7] bg-[#101B2E] border border-[#223B53]'}`}
+                  >
+                    2 · Kolmogorov (Estocástico)
+                  </button>
+                </div>
               </div>
 
-              {/* Selectbox para el Modelo de Red Neuronal */}
+              {/* Modelo de Red Neuronal (botones) */}
               <div className="flex flex-col gap-2 mb-4">
-                <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                <label className="text-xs font-semibold text-[#8FA0B3] uppercase tracking-wider">
                   Modelo de Red Neuronal (CNN)
                 </label>
-                <select
-                  value={activeModel}
-                  onChange={(e) => handleModelChange(e.target.value)}
-                  className="w-full bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs rounded p-2.5 outline-none focus:border-zinc-700 font-sans"
-                >
-                  <option value="phase_diversity">Modelo A (Phase Diversity - 2 Ch)</option>
-                  <option value="resnet10">Modelo ResNet-10 (Phase Diversity - 2 Ch)</option>
-                  <option value="resnet18">Modelo ResNet-18 (Phase Diversity - 2 Ch)</option>
-                </select>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleModelChange('phase_diversity')}
+                    className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${activeModel === 'phase_diversity' ? 'bg-[#0F2433] text-[#4EA3FF] border border-[#223B53]' : 'text-[#8FA0B3] hover:text-[#E8EEF7] bg-[#101B2E] border border-[#223B53]'}`}
+                  >
+                    Modelo A
+                  </button>
+                  <button
+                    onClick={() => handleModelChange('resnet10')}
+                    className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${activeModel === 'resnet10' ? 'bg-[#0F2433] text-[#4EA3FF] border border-[#223B53]' : 'text-[#8FA0B3] hover:text-[#E8EEF7] bg-[#101B2E] border border-[#223B53]'}`}
+                  >
+                    ResNet-10
+                  </button>
+                  <button
+                    onClick={() => handleModelChange('resnet18')}
+                    className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${activeModel === 'resnet18' ? 'bg-[#0F2433] text-[#4EA3FF] border border-[#223B53]' : 'text-[#8FA0B3] hover:text-[#E8EEF7] bg-[#101B2E] border border-[#223B53]'}`}
+                  >
+                    ResNet-18
+                  </button>
+                </div>
               </div>
 
               {/* Sección Dinámica: 11 Polinomios de Zernike */}
               {method === '1' ? (
-                <div className="border-t border-zinc-800 pt-4 flex flex-col gap-3 animate-in fade-in duration-200">
+                <div className="border-t border-[#223B53] pt-4 flex flex-col gap-3 animate-in fade-in duration-200">
                   <div className="flex justify-between items-center mb-1">
                     <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
                       Modos Activos (Noll Zernike)
@@ -833,10 +874,10 @@ function App() {
                   {/* Contenedor scrollable con scrollbar personalizada */}
                   <div className="max-h-[320px] overflow-y-auto pr-1 space-y-3 zernike-scroll">
                     {ZERNIKE_MODES.map((mode) => (
-                      <div key={mode.id} className="border-b border-zinc-800/40 pb-3 last:border-0 last:pb-0">
+                      <div key={mode.id} className="border-b border-[#223B53]/40 pb-3 last:border-0 last:pb-0">
                         {/* Nombre y valor actual */}
                         <div className="flex justify-between items-center mb-1.5">
-                          <span className="text-[10px] font-mono text-zinc-300">
+                          <span className="text-[10px] font-mono text-[#8FA0B3]">
                             {mode.name}
                           </span>
                           <input
@@ -852,7 +893,7 @@ function App() {
                             step={0.01}
                             min={mode.min}
                             max={mode.max}
-                            className="w-16 bg-zinc-900 border border-zinc-800 text-blue-400 font-mono font-bold text-[10px] text-right rounded px-1 py-0.5 outline-none focus:border-blue-500/50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            className="w-16 bg-[#101B2E] border border-[#223B53] text-[#4EA3FF] font-mono font-bold text-[10px] text-right rounded px-1 py-0.5 outline-none focus:border-[#2A3E53] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
                         </div>
                         {/* Slider */}
@@ -887,7 +928,7 @@ function App() {
                   </div>
                 </div>
               ) : method === '2' ? (
-                <div className="border-t border-zinc-800 pt-4 flex flex-col gap-4 animate-in fade-in duration-200">
+                <div className="border-t border-[#223B53] pt-4 flex flex-col gap-4 animate-in fade-in duration-200">
                   <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
                     Parámetros de Turbulencia (Método 2)
                   </div>
@@ -951,13 +992,13 @@ function App() {
                   </div>
                 </div>
               ) : (
-                <div className="border-t border-zinc-800 pt-4 text-xs text-zinc-500 font-mono italic animate-in fade-in duration-200">
+                <div className="border-t border-[#223B53] pt-4 text-xs text-[#8FA0B3] font-mono italic animate-in fade-in duration-200">
                   Ajustes manuales deshabilitados para este método.
                 </div>
               )}
 
               {/* Especificaciones del SLM */}
-              <div className="mt-5 pt-4 border-t border-zinc-800 text-xs text-zinc-400 space-y-1.5 font-mono">
+              <div className="mt-5 pt-4 border-t border-[#223B53] text-xs text-[#8FA0B3] space-y-1.5 font-mono">
                 <div className="text-zinc-500 font-sans font-medium text-[11px] uppercase tracking-wider mb-1">
                   Especificaciones de Hardware
                 </div>
@@ -969,7 +1010,7 @@ function App() {
               </div>
 
               {/* Diagnóstico */}
-              <div className="mt-4 pt-4 border-t border-zinc-800 text-xs text-zinc-400 space-y-1 font-mono">
+              <div className="mt-4 pt-4 border-t border-[#223B53] text-xs text-[#8FA0B3] space-y-1 font-mono">
                 <div className="text-zinc-500 font-sans font-medium text-[11px] uppercase tracking-wider mb-1">
                   Diagnóstico de Enlaces
                 </div>
@@ -991,13 +1032,13 @@ function App() {
 
               {/* Selectbox para el Modelo de Red Neuronal (CNN) */}
               <div className="flex flex-col gap-2 mb-4">
-                <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                <label className="text-xs font-semibold text-[#8FA0B3] uppercase tracking-wider">
                   Modelo de Red Neuronal (CNN)
                 </label>
                 <select
                   value={activeModel}
                   onChange={(e) => handleModelChange(e.target.value)}
-                  className="w-full bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs rounded p-2.5 outline-none focus:border-zinc-700 font-sans"
+                  className="w-full bg-[#101B2E] border border-[#223B53] text-[#E8EEF7] text-xs rounded p-2.5 outline-none focus:border-[#2A3E53] font-sans"
                 >
                   <option value="phase_diversity">Modelo A (Phase Diversity - 2 Ch)</option>
                   <option value="resnet10">Modelo ResNet-10 (Phase Diversity - 2 Ch)</option>
@@ -1006,12 +1047,12 @@ function App() {
               </div>
 
               {/* Parámetros de Control Físico de la Cámara */}
-              <div className="border-t border-zinc-800 pt-4 flex flex-col gap-3">
-                <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
+              <div className="border-t border-[#223B53] pt-4 flex flex-col gap-3">
+                <div className="text-[10px] font-bold text-[#8FA0B3] uppercase tracking-wider mb-1">
                   Control Físico de la Cámara
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <div className="flex justify-between text-[10px] text-zinc-400 font-mono">
+                  <div className="flex justify-between text-[10px] text-[#8FA0B3] font-mono">
                     <span>Exposición (Shutter)</span>
                     <span className="text-blue-400">{cameraShutter.toFixed(1)} ms</span>
                   </div>
@@ -1024,7 +1065,7 @@ function App() {
                   />
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <div className="flex justify-between text-[10px] text-zinc-400 font-mono">
+                  <div className="flex justify-between text-[10px] text-[#8FA0B3] font-mono">
                     <span>Ganancia (Gain)</span>
                     <span className="text-blue-400">{cameraGain.toFixed(1)} dB</span>
                   </div>
@@ -1037,7 +1078,7 @@ function App() {
                   />
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <div className="flex justify-between text-[10px] text-zinc-400 font-mono">
+                  <div className="flex justify-between text-[10px] text-[#8FA0B3] font-mono">
                     <span>Zoom de Tracking (ROI)</span>
                     <span className="text-blue-400">{cameraRoiSize} px</span>
                   </div>
@@ -1052,12 +1093,12 @@ function App() {
               </div>
 
               {/* Parámetros del Controlador Kalman / LQG */}
-              <div className="border-t border-zinc-800 pt-4 flex flex-col gap-3">
-                <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
+              <div className="border-t border-[#223B53] pt-4 flex flex-col gap-3">
+                <div className="text-[10px] font-bold text-[#8FA0B3] uppercase tracking-wider mb-1">
                   Parámetros Kalman / LQG
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <div className="flex justify-between text-[10px] text-zinc-400 font-mono">
+                  <div className="flex justify-between text-[10px] text-[#8FA0B3] font-mono">
                     <span>Ruido Proceso (Q)</span>
                     <span className="text-blue-400">{kalmanQ}</span>
                   </div>
@@ -1070,7 +1111,7 @@ function App() {
                   />
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <div className="flex justify-between text-[10px] text-zinc-400 font-mono">
+                  <div className="flex justify-between text-[10px] text-[#8FA0B3] font-mono">
                     <span>Ruido Medida (R)</span>
                     <span className="text-blue-400">{kalmanR}</span>
                   </div>
@@ -1083,7 +1124,7 @@ function App() {
                   />
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <div className="flex justify-between text-[10px] text-zinc-400 font-mono">
+                  <div className="flex justify-between text-[10px] text-[#8FA0B3] font-mono">
                     <span>Latencia (Delay)</span>
                     <span className="text-blue-400">{kalmanDelay} frames</span>
                   </div>
@@ -1098,8 +1139,8 @@ function App() {
               </div>
 
               {/* Especificaciones de Hardware Real */}
-              <div className="mt-5 pt-4 border-t border-zinc-800 text-xs text-zinc-400 space-y-1.5 font-mono">
-                <div className="text-zinc-500 font-sans font-medium text-[11px] uppercase tracking-wider mb-1">
+              <div className="mt-5 pt-4 border-t border-[#223B53] text-xs text-[#8FA0B3] space-y-1.5 font-mono">
+                <div className="text-[#8FA0B3] font-sans font-medium text-[11px] uppercase tracking-wider mb-1">
                   Especificaciones de Hardware
                 </div>
                 <p>Cámara: Point Grey Chameleon</p>
@@ -1123,15 +1164,7 @@ function App() {
             </div>
           )}
 
-          {activeTab === 'simulation' && (
-            <button
-              onClick={handleCalibrate}
-              disabled={loading || method !== '1'}
-              className={`w-full py-3.5 lab-button-primary uppercase tracking-wide text-xs ${(loading || method !== '1') ? 'opacity-50 cursor-wait' : ''}`}
-            >
-              {loading ? 'Calibrando Dispositivo...' : 'Calibrar Sistema'}
-            </button>
-          )}
+          {/* Botón de calibración eliminado por solicitud del usuario */}
         </aside>
 
         {/* ── PANELES VISUALES ── */}
@@ -1453,30 +1486,7 @@ function App() {
             </div>
           )}
 
-          {/* Barra de estado inferior */}
-          <div className="lab-panel px-6 py-4 flex flex-col gap-4 text-xs font-mono text-zinc-400">
-            <div className="text-[11px] text-zinc-500 uppercase font-sans font-semibold tracking-wider">
-              Diagnóstico de Coeficientes Activos
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
-              <div>
-                <span className="text-zinc-500">Z₁ (Pistón):</span>
-                <p className="text-zinc-300 font-semibold mt-0.5">{zernikes.Z1.toFixed(3)} rad</p>
-              </div>
-              <div>
-                <span className="text-zinc-500">Z₂ (Tip X):</span>
-                <p className="text-zinc-300 font-semibold mt-0.5">{zernikes.Z2.toFixed(3)} rad</p>
-              </div>
-              <div>
-                <span className="text-zinc-500">Z₃ (Tilt Y):</span>
-                <p className="text-zinc-300 font-semibold mt-0.5">{zernikes.Z3.toFixed(3)} rad</p>
-              </div>
-              <div>
-                <span className="text-zinc-500">Z₄ (Defocus):</span>
-                <p className="text-zinc-300 font-semibold mt-0.5">{zernikes.Z4.toFixed(3)} rad</p>
-              </div>
-            </div>
-          </div>
+          {/* Diagnóstico removido por solicitud */}
         </section>
 
       </main>
@@ -1507,7 +1517,9 @@ function StatusBadge({ online, label }) {
   return (
     <div className="flex items-center gap-2 text-xs font-mono">
       <div className={`w-2 h-2 rounded-full ${online ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-      <span className={online ? 'text-emerald-400' : 'text-rose-400 font-semibold'}>{label}</span>
+      {label ? (
+        <span className={online ? 'text-emerald-400' : 'text-rose-400 font-semibold'}>{label}</span>
+      ) : null}
     </div>
   );
 }

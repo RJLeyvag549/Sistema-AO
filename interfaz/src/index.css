@@ -5,13 +5,13 @@
 @tailwind utilities;
 
 :root {
-  --lab-bg: #121214;
-  --lab-panel: #1e1e24;
-  --lab-border: #2e2e38;
-  --lab-border-focus: #4e4e5a;
-  --lab-accent: #3b82f6;
-  --lab-text: #e4e4e7;
-  --lab-text-secondary: #a1a1aa;
+  --lab-bg: #0B1426;
+  --lab-panel: #0F2433;
+  --lab-border: #223B53;
+  --lab-border-focus: #2A3E53;
+  --lab-accent: #4EA3FF;
+  --lab-text: #E8EEF7;
+  --lab-text-secondary: #8FA0B3;
 }
 
 body {
@@ -36,8 +36,7 @@ body {
 .lab-panel {
   background: var(--lab-panel);
   border: 1px solid var(--lab-border);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
 }
 
 .lab-border-thin {
@@ -46,22 +45,23 @@ body {
 
 /* ── Botón estándar de laboratorio ─────────────────────────── */
 .lab-button {
-  background: #27272a;
+  background: transparent;
   border: 1px solid var(--lab-border);
   color: var(--lab-text);
-  font-weight: 500;
-  border-radius: 4px;
-  transition: all 0.2s ease;
+  font-weight: 600;
+  border-radius: 6px;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
   cursor: pointer;
+  padding: 0.45rem 0.75rem;
 }
 
 .lab-button:hover:not(:disabled) {
-  background: #3f3f46;
+  background: rgba(78,163,255,0.06);
   border-color: var(--lab-border-focus);
 }
 
 .lab-button:active:not(:disabled) {
-  background: #18181b;
+  background: rgba(78,163,255,0.08);
 }
 
 .lab-button:disabled {
@@ -72,47 +72,45 @@ body {
 /* ── Botón principal (Calibrar) ────────────────────────────── */
 .lab-button-primary {
   background: var(--lab-accent);
-  border: 1px solid #2563eb;
-  color: #ffffff;
-  font-weight: 600;
-  border-radius: 4px;
-  transition: all 0.2s ease;
+  border: 1px solid rgba(78,163,255,0.95);
+  color: #071327;
+  font-weight: 700;
+  border-radius: 6px;
+  transition: background-color 0.12s ease;
   cursor: pointer;
+  padding: 0.5rem 0.85rem;
 }
 
 .lab-button-primary:hover:not(:disabled) {
-  background: #2563eb;
-  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
+  background: #3fb0ff;
 }
 
 .lab-button-primary:active:not(:disabled) {
-  background: #1d4ed8;
+  background: #2fa0ef;
 }
 
 /* ── Slider Zernike científico ────────────────────────────── */
 .zernike-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #ffffff;
-  border: 1.5px solid var(--lab-accent);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--lab-accent);
+  border: 1px solid rgba(255,255,255,0.06);
   cursor: pointer;
-  transition: background-color 0.1s;
+  transition: transform 0.08s ease;
 }
 
 .zernike-slider::-webkit-slider-thumb:hover {
-  background: var(--lab-accent);
+  transform: scale(1.05);
 }
 
 .zernike-slider::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #ffffff;
-  border: 1.5px solid var(--lab-accent);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--lab-accent);
+  border: 1px solid rgba(255,255,255,0.06);
   cursor: pointer;
 }
 
@@ -144,26 +142,26 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 3px;
-  border: 1px solid #2e2e38;
-  background: #27272a;
-  color: #a1a1aa;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--lab-border);
+  background: transparent;
+  color: var(--lab-text-secondary);
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
   flex-shrink: 0;
   font-family: monospace;
 }
 
 .zernike-step-btn:hover {
-  background: #3f3f46;
-  border-color: #4e4e5a;
-  color: #e4e4e7;
+  background: rgba(78,163,255,0.06);
+  border-color: var(--lab-border-focus);
+  color: var(--lab-text);
 }
 
 .zernike-step-btn:active {
-  background: #18181b;
+  background: rgba(78,163,255,0.08);
 }

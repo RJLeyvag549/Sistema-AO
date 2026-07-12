@@ -98,27 +98,26 @@ class PSFGeneratorDataset(Dataset):
             
         factor_kolmogorov = d_r0 ** (5.0 / 3.0)
         
-        # 2. Generar coeficientes (Z1=0, Z2..Z11 estocásticos según Kolmogorov)
+        # 2. Generar coeficientes iniciales (Z1=0, Z2..Z11 estocásticos según Kolmogorov)
         coefs = np.zeros(11, dtype=np.float32)
+        sigmas = np.zeros(11, dtype=np.float32)
         for i in range(1, 11):  # Z2 a Z11 (índices 1 a 10)
             mode_key = f"Z{i + 1}"
             base_var = NOLL_VARIANCES[mode_key]
-            sigma = np.sqrt(base_var * factor_kolmogorov)
-            coefs[i] = np.random.normal(0, sigma)
-            
-        # 3. Calcular fase en la pupila
+            sigmas[i] = np.sqrt(base_var * factor_kolmogorov)
+            coefs[i] = np.random.normal(0, sigmas[i])
+
+        # 3. Calcular fase en la pupila (Instantánea)
         phase_data = np.zeros(self.size, dtype=np.float32)
         for coef, mode in zip(coefs, self.modes):
             if coef != 0.0:
                 phase_data += coef * mode
-                
-        # 4. Generar PSF de 2 canales (Phase Diversity)
+
         # Canal 1: Foco normal
         wf1 = np.exp(1j * phase_data) * self.pupil
         psf1 = np.abs(focus(wf1, Q=2)) ** 2
-        
+
         # Canal 2: Desfocada (añadimos +1.5 rad de Z4)
-        # Z4 es el cuarto modo (índice 3 en self.modes)
         phase_defocus = phase_data + (1.5 * self.modes[3])
         wf2 = np.exp(1j * phase_defocus) * self.pupil
         psf2 = np.abs(focus(wf2, Q=2)) ** 2
@@ -128,8 +127,12 @@ class PSFGeneratorDataset(Dataset):
         cy, cx = H_img // 2, W_img // 2
         crop_half = 48
         
-        psf1_crop = psf1[cy - crop_half:cy + crop_half, cx - crop_half:cx + crop_half]
-        psf2_crop = psf2[cy - crop_half:cy + crop_half, cx - crop_half:cx + crop_half]
+        # Desplazamiento aleatorio para simular imperfecciones de alineación en tiempo real
+        shift_y = np.random.randint(-2, 3) if self.model_type == "resnet18" else 0
+        shift_x = np.random.randint(-2, 3) if self.model_type == "resnet18" else 0
+        
+        psf1_crop = psf1[cy + shift_y - crop_half:cy + shift_y + crop_half, cx + shift_x - crop_half:cx + shift_x + crop_half]
+        psf2_crop = psf2[cy + shift_y - crop_half:cy + shift_y + crop_half, cx + shift_x - crop_half:cx + shift_x + crop_half]
         
         # Normalizar individualmente
         max1 = np.max(psf1_crop)
@@ -138,9 +141,8 @@ class PSFGeneratorDataset(Dataset):
         psf2_norm = psf2_crop / max2 if max2 > 0 else psf2_crop
         
         # Aumento de datos (Data Augmentation) al vuelo para modelos profundos (resnet18)
-        # Esto reduce el sobreajuste al emular ruido de sensor y fluctuaciones físicas
         if self.model_type == "resnet18":
-            # 1. Ruido Gaussiano aditivo leve (sensibilidad del sensor de imagen)
+            # 1. Ruido Gaussiano aditivo leve
             noise_level = np.random.uniform(0.002, 0.015)
             psf1_norm = psf1_norm + np.random.normal(0, noise_level, psf1_norm.shape)
             psf2_norm = psf2_norm + np.random.normal(0, noise_level, psf2_norm.shape)
@@ -160,10 +162,12 @@ class PSFGeneratorDataset(Dataset):
             torch.from_numpy(psf2_norm.astype(np.float32))
         ], dim=0)
 
-        # Normalizar las etiquetas Zernike
+        # Normalizar las etiquetas Zernike (usando el promedio de los instantes temporales)
+        # Esto garantiza consistencia entre la PSF promedio (lo que ve la red)
+        # y los coeficientes promedio (lo que debe predecir). Igual que el Modelo A.
         zernike_norm = coefs / STDS
         zernike_tensor = torch.from_numpy(zernike_norm)
-        
+
         return psf_tensor, zernike_tensor
 
 

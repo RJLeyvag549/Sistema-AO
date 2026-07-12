@@ -15,8 +15,8 @@ app = Flask(__name__)
 CORS(app)
 
 # Configuraci├│n
-INFERENCIA_URL = "http://inferencia:5000/predict"
-SIMULADOR_URL = "http://simulador:5000/correct"
+INFERENCIA_URL = os.environ.get("INFERENCIA_URL", "http://ao_inferencia:5000").rstrip('/') + "/predict"
+SIMULADOR_URL = os.environ.get("SIMULADOR_URL", "http://ao_simulador:5000").rstrip('/') + "/correct"
 
 @app.route('/status')
 def status():
@@ -33,8 +33,8 @@ def status():
 # Zernike inducidos por el viento (Ley de Taylor).
 
 kalman_config = {
-    "q_scale":      1.0,    # escala del ruido de proceso (normalizado con la física)
-    "cnn_rmse":     0.05,   # RMSE tipico de la CNN en radianes (auto-actualizado segun modelo)
+    "q_scale":      1.0,    # Multiplicador sobre Q calibrada (1.0 = auto-calibracion optima, K_TARGET=0.77)
+    "cnn_rmse":     0.5,    # Factor global de R: 0.5 activa las tablas empiricas del CSV directamente
     "delay":        1,      # pasos de anticipacion LQG
     "wind_angle":   0.0,    # angulo del viento en radianes (0 = eje X)
     "d_r0":         1.0,    # fuerza de turbulencia estimada (para Q)
@@ -83,7 +83,7 @@ def process_frame():
 
     try:
         resp = requests.post(
-            f"http://ao_inferencia:5000/predict?model={model_name}",
+            f"{INFERENCIA_URL}?model={model_name}",
             data=request.data,
             headers={"Content-Type": "application/octet-stream"},
             timeout=1.5
@@ -103,20 +103,22 @@ def process_frame():
     # pred_list[0] = Z1 (piston, ignorado), pred_list[1..10] = Z2..Z11
     y_obs = np.array(pred_list[1:11], dtype=np.float64)
 
-    # Mapear perfiles de error tipicos de la red seleccionada para el filtro Kalman
+    # RMSE tipico por modelo. A viento alto se escala dinamicamente en build_observation_noise_matrix
+    # segun wind_speed (ya no es necesario hacerlo aqui tambien).
     rmse_profiles = {
         'phase_diversity': 0.12,
         'resnet10':        0.08,
         'resnet18':        0.05
     }
     current_rmse = rmse_profiles.get(model_name, 0.05)
-    
+
     # Sincronizar dinamicamente el filtro con la configuracion y modelo activos
     vectorial_filter.cnn_rmse = current_rmse
     vectorial_filter.q_scale  = kalman_config['q_scale']
     vectorial_filter.delay    = kalman_config['delay']
 
     # Ejecutar un unico paso del filtro Kalman Vectorial MIMO
+    # wind_speed se pasa al filtro para que R se ajuste segun degradacion de la CNN
     x_current, x_predicted = vectorial_filter.update(
         y=y_obs,
         wind_speed=wind_speed,
@@ -137,8 +139,8 @@ def process_frame():
     })
 
 
-# Configuraci├│n InfluxDB
-DB_URL = "http://ao_database:8086"
+# Configuración InfluxDB
+DB_URL = os.environ.get("DATABASE_URL", "http://ao_database:8086")
 DB_TOKEN = os.environ.get("INFLUXDB_TOKEN", "token_provisorio_de_github")
 DB_ORG = os.environ.get("INFLUXDB_ORG", "organizacion_ao")
 DB_BUCKET = os.environ.get("INFLUXDB_BUCKET", "telemetria_bucket")
@@ -148,7 +150,7 @@ def calibrate():
     print("\n[CONTROLADOR] Iniciando ciclo de calibracion...", flush=True)
     try:
         # 1. Obtener prediccion de la IA
-        response = requests.get("http://ao_inferencia:5000/predict")
+        response = requests.get(INFERENCIA_URL)
         data = response.json()
         zernike_val = data['zernike'][0]
         
@@ -170,11 +172,11 @@ def calibrate():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 def logic_loop():
-    print("--- CONTROLADOR AO: REGISTRO DE TELEMETR├ìA DE TURBULENCIA INICIADO ---", flush=True)
+    print("--- CONTROLADOR AO: REGISTRO DE TELEMETRÍA DE TURBULENCIA INICIADO ---", flush=True)
     while True:
         try:
             # 1. Obtener el estado actual de la turbulencia del simulador
-            response = requests.get("http://ao_simulador:5000/status", timeout=2)
+            response = requests.get(f"{SIMULADOR_URL.replace('/correct', '')}/status", timeout=2)
             if response.status_code == 200:
                 state_data = response.json()
                 state = state_data.get("state", {})

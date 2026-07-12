@@ -191,8 +191,9 @@ def update_cnn_prediction(psf_data):
     wind_speed = simulation_state.get('wind_speed', 0.5)
     d_r0       = simulation_state.get('d_r0', 1.0)
     try:
+        ctrl_base = os.environ.get("CONTROLADOR_URL", "http://ao_controlador:5000").rstrip('/')
         resp = requests.post(
-            f"http://ao_controlador:5000/process_frame?model={model_name}&wind_speed={wind_speed}&d_r0={d_r0}",
+            f"{ctrl_base}/process_frame?model={model_name}&wind_speed={wind_speed}&d_r0={d_r0}",
             data=psf_data.tobytes(),
             headers={"Content-Type": "application/octet-stream"},
             timeout=1.6
@@ -511,7 +512,8 @@ def update_config():
 
     if ctrl_data:
         try:
-            requests.post("http://ao_controlador:5000/config", json=ctrl_data, timeout=0.5)
+            ctrl_url = os.environ.get("CONTROLADOR_URL", "http://ao_controlador:5000").rstrip('/') + "/config"
+            requests.post(ctrl_url, json=ctrl_data, timeout=0.5)
         except Exception as e:
             print(f"[SIMULADOR] Error propagando config al controlador: {e}")
         

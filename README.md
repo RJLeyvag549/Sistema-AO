@@ -77,4 +77,25 @@ El sistema está configurado con los parámetros reales del **Holoeye Pluto**:
 
 ---
 
+## Requisitos de Hardware (Modo Cámara Real)
+
+El sistema está diseñado para integrarse con una cámara física **Point Grey Chameleon CMLN-13S2M** vía USB. Debido a la necesidad de acceso directo a nivel de kernel al dispositivo USB, el demonio de la cámara no se ejecuta dentro de Docker, sino directamente en el entorno de Windows anfitrión.
+
+Para ejecutar el sistema en modo cámara real, deberá instalar una sola vez:
+
+1. **[FlyCapture2 SDK](https://www.flir.com/products/flycapture-sdk/)**: Descargue e instale el SDK de FLIR/Point Grey en su sistema Windows. Esto instalará los controladores USB necesarios y colocará la DLL base en `C:\Program Files\Point Grey Research\FlyCapture2\bin64\FlyCapture2_C_v100.dll`.
+2. **Dependencias de Python en Windows**:
+   Instale los paquetes necesarios en su entorno Python local de Windows:
+   ```bash
+   pip install opencv-python numpy requests
+   ```
+
+**Para Iniciar en Modo Cámara Real:**
+No use `docker-compose up`. En su lugar, ejecute el script principal que levanta los contenedores y el demonio de la cámara en secuencia:
+```cmd
+iniciar_sistema_ao.bat
+```
+
+---
+
 **Desarrollado para el Laboratorio de Óptica Adaptativa - Universidad del Bío-Bío.**

@@ -47,7 +47,7 @@ Este documento describe la topología, hiperparámetros, activaciones y regresio
 *   **Bloques Residuales (BasicBlock)**:
     *   Cada bloque consta de: Conv 3x3 -> BatchNorm2d -> **ReLU** -> Conv 3x3 -> BatchNorm2d -> Suma con el atajo (shortcut) -> **ReLU**.
     *   El atajo (shortcut) iguala dimensiones con una Conv 1x1 y BatchNorm2d si cambian los canales o el tamaño espacial.
-    *   **Nota de Compatibilidad**: Este modelo utiliza ReLU estándar. El uso de LeakyReLU en este modelo causaba distorsiones estáticas graves debido a la incompatibilidad con los pesos originales entrenados.
+    *   **Nota de Diseño**: Este modelo utiliza ReLU estándar (no LeakyReLU), lo que le otorga mayor estabilidad durante el entrenamiento al trabajar con bloques residuales con BatchNorm.
 *   **Etapas Convolucionales**:
     *   **Layer 1**: 1 bloque de 32 canales, stride 1. Salida: 32 x 24 x 24.
     *   **Layer 2**: 1 bloque de 64 canales, stride 2. Salida: 64 x 12 x 12.
