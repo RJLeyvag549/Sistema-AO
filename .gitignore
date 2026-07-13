@@ -27,6 +27,7 @@ inferencia/shared/dataset/
 
 # CSVs de resultados de captura (pueden pesar decenas de MB)
 scripts/resultados/*.csv
+controlador/csv_logs/*.csv
 
 # IDEs
 .vscode/

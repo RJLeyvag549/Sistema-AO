@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { Settings, Activity, Info } from 'lucide-react';
+import { Settings, Activity, Info, ArrowLeft, RefreshCw, ExternalLink, TrendingUp, BarChart2 } from 'lucide-react';
 import logoUbb from './assets/v-escudo-color-gradiente.png';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
+const CONTROLADOR_BASE = import.meta.env.VITE_CONTROLADOR_BASE || 'http://localhost:5002';
 
 const ZERNIKE_MODES = [
   { id: 'Z1', name: 'Z₁ — Pistón (Piston)', min: -Math.PI, max: Math.PI, step: 0.01 },
@@ -19,10 +20,391 @@ const ZERNIKE_MODES = [
   { id: 'Z11', name: 'Z₁₁ — Aberración Esférica', min: -5.0, max: 5.0, step: 0.05 },
 ];
 
+
+function AnalyticsDashboard() {
+  const [history, setHistory] = useState([]);
+  const [summary, setSummary] = useState({ rmse_cnn: 0.0, rmse_control: 0.0, improvement: 0.0 });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [csvRecording, setCsvRecording] = useState(false);
+  const [csvStatus, setCsvStatus] = useState({ file_path: '', frames_written: 0, elapsed_s: 0 });
+  const [csvLoading, setCsvLoading] = useState(false);
+
+  const fetchCsvStatus = () => {
+    axios.get(`${CONTROLADOR_BASE}/telemetry/csv/status`)
+      .then(res => {
+        setCsvRecording(res.data.recording || false);
+        setCsvStatus({
+          file_path: res.data.file_path || '',
+          frames_written: res.data.frames_written || 0,
+          elapsed_s: res.data.elapsed_s || 0,
+        });
+      })
+      .catch(err => {
+        console.error('Error fetching CSV status:', err);
+      });
+  };
+
+  const startCsvRecording = () => {
+    setCsvLoading(true);
+    axios.post(`${CONTROLADOR_BASE}/telemetry/csv/start`)
+      .then(res => {
+        if (res.data.status === 'success') {
+          setCsvRecording(true);
+          fetchCsvStatus();
+        } else {
+          console.error('CSV start failed:', res.data.message);
+        }
+      })
+      .catch(err => {
+        console.error('Error starting CSV recording:', err);
+      })
+      .finally(() => setCsvLoading(false));
+  };
+
+  const stopCsvRecording = () => {
+    setCsvLoading(true);
+    axios.post(`${CONTROLADOR_BASE}/telemetry/csv/stop`)
+      .then(res => {
+        if (res.data.status === 'success') {
+          setCsvRecording(false);
+          fetchCsvStatus();
+        } else {
+          console.error('CSV stop failed:', res.data.message);
+        }
+      })
+      .catch(err => {
+        console.error('Error stopping CSV recording:', err);
+      })
+      .finally(() => setCsvLoading(false));
+  };
+
+  const fetchStats = () => {
+    axios.get(`${CONTROLADOR_BASE}/telemetry/stats`)
+      .then(res => {
+        if (res.data.status === 'success') {
+          setHistory(res.data.history || []);
+          setSummary(res.data.summary || { rmse_cnn: 0.0, rmse_control: 0.0, improvement: 0.0 });
+          setError(null);
+        }
+      })
+      .catch(err => {
+        console.error('Error fetching telemetry:', err);
+        setError('Error al conectar con la base de datos de telemetría.');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  };
+
+  useEffect(() => {
+    // Iniciar sesión de telemetría activa en el controlador
+    axios.post(`${CONTROLADOR_BASE}/telemetry/session/start`)
+      .then(() => {
+        fetchStats();
+        fetchCsvStatus();
+      })
+      .catch(err => console.error("Error al iniciar sesión de telemetría:", err));
+
+    const interval = setInterval(() => {
+      fetchStats();
+      fetchCsvStatus();
+    }, 1000);
+
+    return () => {
+      clearInterval(interval);
+      // Apagar telemetría en segundo plano al salir
+      axios.post(`${CONTROLADOR_BASE}/telemetry/session/stop`)
+        .catch(err => console.error("Error al detener sesión de telemetría:", err));
+    };
+  }, []);
+
+  // Obtener el último frame de telemetría para mostrar en vivo
+  const lastFrame = history[history.length - 1] || {};
+
+  // Preparar datos de comparación en vivo Real vs CNN vs Control para Z2-Z11
+  const comparisonData = ZERNIKE_MODES.slice(1).map(mode => {
+    const key = mode.id.toLowerCase();
+    return {
+      id: mode.id,
+      name: mode.name.split(' — ')[1] || mode.id,
+      real: lastFrame[key] || 0.0,
+      cnn: lastFrame[`${key}_cnn`] || 0.0,
+      control: lastFrame[`${key}_control`] || 0.0,
+    };
+  });
+
+  const maxValModos = Math.max(
+    ...comparisonData.flatMap(d => [Math.abs(d.real), Math.abs(d.cnn), Math.abs(d.control)]),
+    0.1
+  );
+
+  // Funciones para graficar en SVG
+  const renderRmseChart = () => {
+    if (history.length < 2) return <text x="50" y="50" fill="#71717a" className="text-xs font-mono">Esperando suficientes datos...</text>;
+    const w = 500;
+    const h = 180;
+    const padding = 30;
+    const plotW = w - padding * 2;
+    const plotH = h - padding * 2;
+
+    // Obtener los RMSE por punto para graficar
+    const points = history.map((row, idx) => {
+      let cnn_se = 0;
+      let ctrl_se = 0;
+      for (let i = 2; i <= 11; i++) {
+        const real = row[`z${i}`] || 0.0;
+        const cnn = row[`z${i}_cnn`] || 0.0;
+        const ctrl = row[`z${i}_control`] || 0.0;
+        cnn_se += (cnn - real)**2;
+        ctrl_se += (ctrl - real)**2;
+      }
+      return {
+        x: idx,
+        cnn_rmse: Math.sqrt(cnn_se / 10),
+        ctrl_rmse: Math.sqrt(ctrl_se / 10)
+      };
+    });
+
+    const maxVal = Math.max(...points.flatMap(p => [p.cnn_rmse, p.ctrl_rmse]), 0.1) * 1.15;
+
+    const getX = (idx) => padding + (idx / (points.length - 1)) * plotW;
+    const getY = (val) => h - padding - (val / maxVal) * plotH;
+
+    const cnnPath = points.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${getX(idx)} ${getY(p.cnn_rmse)}`).join(' ');
+    const ctrlPath = points.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${getX(idx)} ${getY(p.ctrl_rmse)}`).join(' ');
+
+    return (
+      <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-full">
+        {/* Ejes */}
+        <line x1={padding} y1={h - padding} x2={w - padding} y2={h - padding} stroke="#223B53" strokeWidth="1" />
+        <line x1={padding} y1={padding} x2={padding} y2={h - padding} stroke="#223B53" strokeWidth="1" />
+        
+        {/* Gridlines y etiquetas Y */}
+        {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
+          const val = ratio * maxVal;
+          const y = getY(val);
+          return (
+            <g key={i}>
+              <line x1={padding} y1={y} x2={w - padding} y2={y} stroke="#182A3A" strokeWidth="0.5" strokeDasharray="3,3" />
+              <text x={padding - 6} y={y + 3} fill="#8FA0B3" className="text-[8px] font-mono text-right" textAnchor="end">{val.toFixed(2)}</text>
+            </g>
+          );
+        })}
+
+        {/* Polilíneas */}
+        <path d={cnnPath} fill="none" stroke="#f43f5e" strokeWidth="1.5" />
+        <path d={ctrlPath} fill="none" stroke="#3b82f6" strokeWidth="1.5" />
+
+        {/* Leyenda en gráfico */}
+        <text x={w - 110} y={padding + 10} fill="#f43f5e" className="text-[9px] font-semibold">● CNN Directa</text>
+        <text x={w - 110} y={padding + 22} fill="#3b82f6" className="text-[9px] font-semibold">● Kalman + LQG</text>
+      </svg>
+    );
+  };
+
+  return (
+    <div className="min-h-screen p-6 flex flex-col gap-6 font-sans bg-[#0B1426] text-[#E8EEF7]">
+      {/* Header */}
+      <header className="rounded-xl border border-[#223B53] bg-[#0F2433] px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => window.close()}
+            className="flex h-9 w-9 items-center justify-center rounded-md border border-[#223B53] bg-[#101B2E] text-zinc-400 hover:text-white transition-colors"
+            title="Cerrar pestaña"
+          >
+            <ArrowLeft size={16} />
+          </button>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-sm font-semibold tracking-[0.02em]">
+                Panel Científico de Analíticas AO
+              </h1>
+              <span className="rounded border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[9px] uppercase tracking-wider text-blue-400">
+                Lazo Cerrado
+              </span>
+            </div>
+            <p className="text-[10px] text-[#8FA0B3]">Monitoreo de rendimiento cuantitativo en tiempo real</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={fetchStats}
+            className="flex h-9 w-9 items-center justify-center rounded-md border border-[#223B53] bg-[#101B2E] text-zinc-400 hover:text-white transition-colors"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          </button>
+          <button
+            onClick={startCsvRecording}
+            disabled={csvRecording || csvLoading}
+            className="rounded-md border border-emerald-500 bg-emerald-600/10 px-3 py-2 text-[11px] text-emerald-300 hover:bg-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Grabar en CSV
+          </button>
+          <button
+            onClick={stopCsvRecording}
+            disabled={!csvRecording || csvLoading}
+            className="rounded-md border border-rose-500 bg-rose-600/10 px-3 py-2 text-[11px] text-rose-300 hover:bg-rose-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Detener
+          </button>
+          <img src={logoUbb} alt="UBB" className="h-8 opacity-80" />
+        </div>
+        <div className="mt-2 flex flex-wrap gap-3 text-[10px] text-zinc-400">
+          <span>{csvRecording ? 'Grabando telemetría a CSV' : 'No se está grabando CSV'}</span>
+          <span>{csvStatus.frames_written} puntos</span>
+          {csvStatus.file_path ? <span className="truncate max-w-[24rem]">Archivo: {csvStatus.file_path}</span> : null}
+        </div>
+      </header>
+
+      {error ? (
+        <div className="lab-panel p-6 text-center text-rose-400 font-mono text-xs">
+          {error}
+        </div>
+      ) : loading ? (
+        <div className="lab-panel p-12 text-center text-zinc-500 font-mono text-xs animate-pulse">
+          Cargando telemetría histórica desde InfluxDB...
+        </div>
+      ) : (
+        <div className="flex flex-col gap-6">
+          {/* KPI Dashboard */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="lab-panel p-4 flex flex-col">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">RMSE CNN Directo</span>
+              <span className="text-2xl font-mono font-bold text-rose-400 mt-1">{summary.rmse_cnn.toFixed(4)}</span>
+              <span className="text-[9px] text-zinc-500 mt-1 font-mono">Último minuto (con lag de 1 frame)</span>
+            </div>
+            <div className="lab-panel p-4 flex flex-col">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">RMSE Kalman + LQG</span>
+              <span className="text-2xl font-mono font-bold text-blue-400 mt-1">{summary.rmse_control.toFixed(4)}</span>
+              <span className="text-[9px] text-zinc-500 mt-1 font-mono">Corrección anticipada para compensar lag</span>
+            </div>
+            <div className="lab-panel p-4 flex flex-col">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Mejora Neta del Filtro</span>
+              <span className="text-2xl font-mono font-bold text-emerald-400 mt-1">
+                {summary.improvement >= 0 ? `+${summary.improvement}%` : `${summary.improvement}%`}
+              </span>
+              <span className="text-[9px] text-zinc-500 mt-1 font-mono">Reducción del RMSE acumulado</span>
+            </div>
+            <div className="lab-panel p-4 flex flex-col">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Incertidumbre Promedio</span>
+              <span className="text-2xl font-mono font-bold text-zinc-300 mt-1">
+                {(history[history.length - 1]?.kalman_uncertainty || 0.0).toFixed(6)}
+              </span>
+              <span className="text-[9px] text-zinc-500 mt-1 font-mono">Traza de la matriz P del filtro</span>
+            </div>
+          </div>
+
+          {/* Gráficos Principales */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Comparativa RMSE */}
+            <div className="lab-panel p-5 flex flex-col">
+              <div className="mb-4">
+                <span className="text-xs font-semibold uppercase tracking-wider text-white">Comparativa de RMSE de Lazo Cerrado</span>
+                <p className="text-[10px] text-zinc-400 mt-0.5">Evolución temporal del error residual (menor es mejor)</p>
+              </div>
+              <div className="h-56 bg-[#071327] rounded border border-zinc-800 p-2 flex items-center justify-center">
+                {renderRmseChart()}
+              </div>
+            </div>
+
+            {/* Comparación Z2-Z11 Real vs CNN vs Kalman (Barras Agrupadas) */}
+            <div className="lab-panel p-5 flex flex-col">
+              <div className="mb-2 flex justify-between items-center">
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-wider text-white">Modos Zernike en Tiempo Real</span>
+                  <p className="text-[10px] text-zinc-400 mt-0.5">Comparativa instantánea de amplitud absoluta por modo</p>
+                </div>
+                <div className="flex gap-3 text-[9px] font-mono">
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-1.5 bg-[#e4e4e7] rounded-sm inline-block" /> Real</span>
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-1.5 bg-[#f43f5e] rounded-sm inline-block" /> CNN</span>
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-1.5 bg-[#3b82f6] rounded-sm inline-block" /> Kalman</span>
+                </div>
+              </div>
+              
+              <div className="h-56 bg-[#071327] rounded border border-zinc-800 p-4 flex items-end justify-between gap-2">
+                {comparisonData.map((item, i) => {
+                  return (
+                    <div key={i} className="flex-1 flex flex-col items-center h-full justify-end relative group">
+                      {/* Tooltip con valores precisos */}
+                      <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-[#0A1628] border border-[#223B53] text-[7px] font-mono p-1 rounded shadow-lg pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-nowrap">
+                        R: {item.real.toFixed(3)}<br />
+                        C: {item.cnn.toFixed(3)}<br />
+                        K: {item.control.toFixed(3)}
+                      </div>
+                      {/* Grupo de 3 barras alineadas en la base */}
+                      <div className="w-full flex items-end gap-0.5 h-[80%] pb-1 border-b border-zinc-800">
+                        <div className="flex-1 bg-zinc-400/35 border-t border-zinc-400/50 rounded-t-sm transition-all duration-300"
+                          style={{ height: `${Math.max(Math.min((Math.abs(item.real) / maxValModos) * 100, 100), 2)}%` }} />
+                        <div className="flex-1 bg-rose-500/40 border-t border-rose-500/60 rounded-t-sm transition-all duration-300"
+                          style={{ height: `${Math.max(Math.min((Math.abs(item.cnn) / maxValModos) * 100, 100), 2)}%` }} />
+                        <div className="flex-1 bg-blue-500/45 border-t border-blue-500/75 rounded-t-sm transition-all duration-300"
+                          style={{ height: `${Math.max(Math.min((Math.abs(item.control) / maxValModos) * 100, 100), 2)}%` }} />
+                      </div>
+                      <div className="text-[9px] font-mono font-bold text-zinc-400 mt-1">{item.id}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Registros de Telemetría Recientes — ancho completo */}
+          <div className="lab-panel p-4 flex flex-col overflow-hidden">
+            <div className="mb-3">
+              <span className="text-xs font-semibold uppercase tracking-wider text-white">Registros de Telemetría Recientes (Z₂ - Z₁₁)</span>
+            </div>
+            <div className="flex-1 overflow-x-auto max-h-[144px] zernike-scroll">
+              <table className="w-full text-left font-mono text-[9px] border-collapse min-w-[700px]">
+                <thead>
+                  <tr className="border-b border-[#223B53] text-[#8FA0B3]">
+                    <th className="py-1.5 px-2 bg-[#0F2433] sticky left-0 z-10">Timestamp</th>
+                    <th className="py-1.5 px-2 text-right">D/r₀</th>
+                    {ZERNIKE_MODES.slice(1).map(m => (
+                      <th key={m.id} className="py-1.5 px-2 text-right">{m.id}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.slice(-6).reverse().map((row, i) => (
+                    <tr key={i} className="border-b border-zinc-800/40 hover:bg-zinc-900/30">
+                      <td className="py-1.5 px-2 text-zinc-400 bg-[#0B1426] sticky left-0 font-semibold">
+                        {row.time ? new Date(row.time).toLocaleTimeString() : 'N/A'}
+                      </td>
+                      <td className="py-1.5 px-2 text-right text-emerald-400">{(row.d_r0 || 0).toFixed(2)}</td>
+                      {ZERNIKE_MODES.slice(1).map(m => {
+                        const val = row[m.id.toLowerCase()] || 0.0;
+                        return (
+                          <td key={m.id} className="py-1.5 px-2 text-right text-zinc-300">
+                            {val.toFixed(3)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [method, setMethod] = useState('1'); // '1', '2', '3', or '4'
   const [activeModel, setActiveModel] = useState('phase_diversity');
   const [activeTab, setActiveTab] = useState('simulation'); // 'simulation' | 'camera'
+  
+  // Ruteador por parametros de URL simple para pestaña de analiticas
+  const urlParams = new URLSearchParams(window.location.search);
+  const view = urlParams.get('view');
+  if (view === 'analytics') {
+    return <AnalyticsDashboard />;
+  }
+
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraFps, setCameraFps] = useState(0.0);
   const [cameraCentroid, setCameraCentroid] = useState([640, 480]);
@@ -758,36 +1140,30 @@ function App() {
                 Modo Simulación
               </button>
               <div className="w-1" />
-              {/* MÓDULO CÁMARA REAL — visible pero deshabilitado hasta completar desarrollo */}
-              <div className="relative group">
-                <button
-                  disabled
-                  className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold
-                             text-[#8FA0B3]/50 cursor-not-allowed select-none"
-                  title="Módulo de Cámara Real — En desarrollo"
-                >
-                  <div className="h-2 w-2 rounded-full bg-[#6B7280]/40" />
-                  Cámara Real
-                  <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider
-                                   bg-amber-500/15 text-amber-400 border border-amber-500/30">
-                    WIP
-                  </span>
-                </button>
-                {/* Tooltip al hacer hover */}
-                <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-2 z-50
-                                w-44 rounded-lg border border-[#223B53] bg-[#0A1628] px-3 py-2 shadow-xl
-                                opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-                  <p className="text-[10px] text-amber-400 font-semibold mb-0.5">En desarrollo</p>
-                  <p className="text-[10px] text-[#8FA0B3] leading-snug">
-                    El módulo de cámara infrarroja estará disponible próximamente.
-                  </p>
-                </div>
-              </div>
+              <button
+                onClick={() => setActiveTab('camera')}
+                className={`flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-colors duration-150 ${
+                  activeTab === 'camera' ? 'bg-[#0F2433] text-[#E8EEF7] border border-[#2A3E53]' : 'text-[#8FA0B3] hover:text-[#E8EEF7]'
+                }`}
+              >
+                Cámara Real
+              </button>
             </div>
           </div>
 
-          {/* Derecha: estado compacto + logo (sin texto largo del simulador) */}
+          {/* Derecha: estado compacto + boton estadisticas + logo */}
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => window.open(window.location.origin + '?view=analytics', '_blank')}
+              className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold
+                         border border-[#2A3E53] bg-[#101B2E] text-[#4EA3FF]
+                         hover:bg-[#0F2433] hover:text-[#E8EEF7] hover:border-[#4EA3FF]
+                         transition-colors duration-150 select-none"
+            >
+              <TrendingUp size={14} />
+              Ver Estadísticas
+              <ExternalLink size={11} className="opacity-50" />
+            </button>
             <div className="flex items-center gap-3 rounded-md border border-[#223B53] bg-[#101B2E] px-3 py-2">
               <StatusBadge online={simOnline} label={''} />
               <div className="h-5 w-px bg-[#223B53]" />
@@ -1360,12 +1736,8 @@ function App() {
             )
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full animate-in fade-in duration-300">
-
-              {/* COLUMNA IZQUIERDA: CÁMARA RAW Y SPOT ROI */}
-              <div className="flex flex-col gap-6">
-                
-                {/* 1. Feed completo de Cámara (1280x960, previsualizado en 320x240 en canvas) */}
-                <div className="lab-panel p-4 flex flex-col h-[380px]">
+              {/* 1. Feed completo de Cámara */}
+              <div className="lab-panel p-4 flex flex-col h-[500px]">
                   <div className="mb-3">
                     <span className="text-xs font-semibold text-white uppercase tracking-wider">FEED COMPLETO DE CÁMARA (1280x960)</span>
                     <p className="text-xs text-zinc-400 mt-0.5">
@@ -1391,34 +1763,8 @@ function App() {
                   </div>
                 </div>
 
-                {/* 2. Spot Diagram (ROI 96x96, extraído y colorizado) */}
-                <div className="lab-panel p-4 flex flex-col h-[380px]">
-                  <div className="mb-3">
-                    <span className="text-xs font-semibold text-white uppercase tracking-wider">SPOT DIAGRAM DE ENTRADA (ROI 96x96)</span>
-                    <p className="text-xs text-zinc-400 mt-0.5">
-                      Región recortada del centroide, colorizada en espectro térmico para la CNN
-                    </p>
-                  </div>
-                  <div className="flex-1 bg-black rounded border border-zinc-800 overflow-hidden flex items-center justify-center relative min-h-0">
-                    <canvas
-                      ref={canvasRef}
-                      width={640}
-                      height={360}
-                      className="w-full h-full object-contain"
-                      style={{ imageRendering: 'pixelated' }}
-                    />
-                    <div className="absolute top-2 left-2 font-mono text-[9px] text-zinc-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
-                      PSF_INPUT_ROI (Mono8 Zoom)
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* COLUMNA DERECHA: CORRECCIONES DE LA IA Y FILTRADO */}
-              <div className="flex flex-col gap-6">
-                
-                {/* 3. Mapa de Fase SLM (Corrección CNN) */}
-                <div className="lab-panel p-4 flex flex-col h-[380px]">
+                {/* 2. Mapa de Fase SLM (Corrección CNN) */}
+                <div className="lab-panel p-4 flex flex-col h-[500px]">
                   <div className="mb-3 flex justify-between items-center">
                     <div>
                       <span className="text-xs font-semibold text-white uppercase tracking-wider">MAPA DE FASE SLM (CORRECCIÓN CNN)</span>
@@ -1450,39 +1796,6 @@ function App() {
                     </div>
                   </div>
                 </div>
-
-                {/* 4. PSF Reconstruida (CNN + Predictor LQG) */}
-                <div className="lab-panel p-4 flex flex-col h-[380px]">
-                  <div className="mb-3 flex justify-between items-start">
-                    <div>
-                      <span className="text-xs font-semibold text-white uppercase tracking-wider">PSF CORREGIDA EN LAZO CERRADO (LQG)</span>
-                    </div>
-                    <div className="flex gap-4 text-right shrink-0">
-                      <div>
-                        <span className="text-[9px] font-mono text-zinc-500 block uppercase">Precisión LQG t+1 (2s)</span>
-                        <span className="text-xs font-mono font-bold text-emerald-400">{avgKalmanAccuracy.toFixed(2)}%</span>
-                      </div>
-                      <div>
-                        <span className="text-[9px] font-mono text-zinc-500 block uppercase">Varianza P</span>
-                        <span className="text-xs font-mono font-bold text-blue-400">{kalmanUncertainty.toFixed(4)}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex-1 bg-black rounded border border-zinc-800 overflow-hidden flex items-center justify-center relative min-h-0">
-                    <canvas
-                      ref={kalmanPsfCanvasRef}
-                      width={640}
-                      height={360}
-                      className="w-full h-full object-contain"
-                      style={{ imageRendering: 'pixelated' }}
-                    />
-                    <div className="absolute top-2 left-2 font-mono text-[9px] text-zinc-400 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
-                      RECON_PSF_LQG_PREDICT (Lazo Cerrado)
-                    </div>
-                  </div>
-                </div>
-              </div>
-
             </div>
           )}
 
@@ -1515,11 +1828,11 @@ function ZernikeSlider({ value, onChange, min, max, step }) {
 
 function StatusBadge({ online, label }) {
   return (
-    <div className="flex items-center gap-2 text-xs font-mono">
-      <div className={`w-2 h-2 rounded-full ${online ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-      {label ? (
-        <span className={online ? 'text-emerald-400' : 'text-rose-400 font-semibold'}>{label}</span>
-      ) : null}
+    <div className="flex items-center gap-1.5 text-[10px] font-mono select-none">
+      <span className={online ? 'text-[#8FA0B3]' : 'text-rose-500 font-semibold'}>
+        {online ? 'SIMULATOR ACTIVE' : 'SIMULATOR OFFLINE'}
+      </span>
+      {label && <span className="text-zinc-500 ml-1">· {label}</span>}
     </div>
   );
 }

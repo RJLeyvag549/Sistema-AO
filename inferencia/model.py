@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 class BaselineCNN(nn.Module):
-    def __init__(self, in_channels=1):
+    def __init__(self, in_channels=2):
         super(BaselineCNN, self).__init__()
         
         # Convolución 1: Entrada in_channels (PSF gris), 32 filtros 5x5, padding=2

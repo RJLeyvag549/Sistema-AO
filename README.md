@@ -98,4 +98,73 @@ iniciar_sistema_ao.bat
 
 ---
 
-**Desarrollado para el Laboratorio de Óptica Adaptativa - Universidad del Bío-Bío.**
+## Modelos CNN de Inferencia
+
+El servicio `ao_inferencia` incluye tres modelos pre-entrenados listos para usar sin necesidad de configuración adicional.
+
+### Modelos disponibles
+
+| Modelo | Arquitectura | Parámetros | Uso |
+|---|---|---|---|
+| `phase_diversity` | CNN base (2 canales) | 4.8 M | Estimación de Zernike por diversidad de fase |
+| `resnet10` | ResNet-10 (2 canales) | 1.2 M | Predicción rápida, bajo consumo de VRAM |
+| `resnet18` | ResNet-18 (2 canales) | 11.2 M | Mayor precisión, requiere GPU |
+
+### Carga de modelos — Prioridad automática
+
+Al iniciar, el servicio busca los pesos en este orden:
+
+```
+1. /app/shared/   ← volumen Docker (salida de train.py, tiene precedencia)
+2. /app/models/   ← modelos versionados en el repositorio (por defecto)
+3. /app/          ← compatibilidad con instalaciones antiguas
+```
+
+**En un `git clone` + `docker-compose up` sin entrenamiento previo**, el sistema arranca directamente con los modelos pre-entrenados incluidos en `inferencia/models/`. No es necesario entrenar para que el sistema funcione.
+
+Cuando se ejecuta `train.py`, los nuevos pesos se guardan en el volumen `shared_data` y toman precedencia automáticamente. Si el volumen se elimina (`docker-compose down -v`), el sistema vuelve a los modelos del repositorio sin intervención manual.
+
+---
+
+## Entrenamiento de Modelos (Opcional)
+
+Para re-entrenar cualquier modelo con nuevas muestras simuladas al vuelo:
+
+```bash
+# Entrenar Phase Diversity (modelo base)
+docker exec -it ao_inferencia python train.py --model phase_diversity --samples 100000 --epochs 10
+
+# Entrenar ResNet-10 (más rápido)
+docker exec -it ao_inferencia python train.py --model resnet10 --samples 100000 --epochs 10
+
+# Entrenar ResNet-18 (mayor precisión, requiere GPU)
+docker exec -it ao_inferencia python train.py --model resnet18 --samples 100000 --epochs 10
+```
+
+**Parámetros disponibles:**
+
+| Parámetro | Descripción | Por defecto |
+|---|---|---|
+| `--model` | Modelo a entrenar: `phase_diversity`, `resnet10`, `resnet18` | `phase_diversity` |
+| `--samples` | Número de muestras simuladas al vuelo | `100000` |
+| `--val-samples` | Muestras de validación | `10000` |
+| `--epochs` | Ciclos de entrenamiento | `10` |
+
+Los pesos entrenados se guardan en el volumen compartido (`shared_data`) y se activan automáticamente en la siguiente inferencia sin necesidad de reiniciar los contenedores.
+
+---
+
+## Captura de Datos y Análisis (Desarrollo)
+
+Para capturar datos de telemetría del sistema en operación y analizar el rendimiento del filtro Kalman+LQG:
+
+```bash
+# Captura automática (~13 min, cubre 40 combinaciones de viento y turbulencia)
+python scripts/captura_datos_viento.py
+```
+
+El script genera un CSV en `scripts/resultados/` con los coeficientes Zernike reales, predicciones CNN y salida del controlador Kalman para cada frame. Los CSVs están excluidos del repositorio (`.gitignore`) por su tamaño.
+
+---
+
+

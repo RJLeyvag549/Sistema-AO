@@ -796,6 +796,21 @@ def get_kalman_psf_raw():
     return response
 
 
+
+@app.route('/telemetry/stats', methods=['GET'])
+def get_telemetry_stats():
+    """
+    Ruta proxy que redirige la consulta de estadisticas de telemetria
+    al controlador interno de la red docker.
+    """
+    try:
+        ctrl_base = os.environ.get("CONTROLADOR_URL", "http://ao_controlador:5000").rstrip('/')
+        resp = requests.get(f"{ctrl_base}/telemetry/stats", timeout=3.0)
+        return (resp.content, resp.status_code, resp.headers.items())
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Error de proxy al conectar con controlador: {str(e)}"}), 500
+
+
 # ===============================================================
 # EJECUCION DEL SERVIDOR
 # ===============================================================
